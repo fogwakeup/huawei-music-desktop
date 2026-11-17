@@ -1,6 +1,6 @@
 # 实现进度
 
-更新时间：2026-10-28。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。2026-10-21 起在 Windows 11 本机完成 NSIS 构建、安装与启动验证（见 M6）；2026-10-28 起开发验收转到 Windows 11 本机进行。
+更新时间：2026-11-17。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。2026-10-21 起在 Windows 11 本机完成 NSIS 构建、安装与启动验证（见 M6）；2026-10-28 起开发验收转到 Windows 11 本机进行。
 
 ## M0–M6
 
@@ -161,6 +161,15 @@
 截图位于被忽略的 `release/qa/`，其中 `linux-favorites-965-synthetic.png` 与 Smoke MP3/FLAC 都是离线测试内容，绝不是用户真实账号数据。当前 AppImage 是内部测试，不代表 M1 或三端验收完成。
 
 本轮未读取/导入 `.local/` 私人会话、未执行任何真实账号写操作，因此没有新增真实对象需要清理。测试 profile 与合成资源由脚本 finally 清除。源码后按用户授权提交至 Gitee 私有仓库；安装包/凭据/日志未上传，未改系统代理。
+
+## 右键菜单 / 播控条 / 毛玻璃 / 推荐 / 歌词可调（2026-11-17）
+
+- 曲目右键菜单：播放 / 下一首播放 / 收藏 / 移出队列 / 从历史移除，按上下文裁剪；与行内按钮共用 IPC，收藏页与队列实时同步。
+- 桌面播控条：独立置顶窗口（`frame:false` + `transparent` + `skipTaskbar` + `focusable:false` + `setAlwaysOnTop('screen-saver')`）。**Win11 无公开 DeskBand 接口，故采用「任务栏贴合浮层」**：`taskbarStrip()` 由 `bounds` 与 `workArea` 之差推导任务栏四边与厚度（自动隐藏回退 48px），`taskbarBarRect()` 把条放进带内、预留托盘宽度并横向钳制；`taskbarX` 记忆位置，显示器变化重算，5 秒置顶心跳。`focusable:false`（WS_EX_NOACTIVATE）下原生拖拽完全失效（实测窗口漂移 840px），改为渲染层 `drag-*` IPC + 主进程按 `screen.getCursorScreenPoint()` 位移。
+- 毛玻璃：全窗（含标题栏、侧栏）统一为一层玻璃；`GlassSettings` 9 项 + 背景图可调。背景图经原生选择器 → 主进程校验（PNG/JPG/WebP/GIF，拒 SVG，≤3 MB）→ 严格 `data:` URL 存设置。修复设置页上滑重叠与「上传背景图不生效」。
+- 桌面歌词：字号 16–96、宽度 280–2400、颜色、可选底板；默认纯文字，控制条仅悬停显示；锁定后 `display:none` + 鼠标穿透，黑框消失。新增 `settings:changed` 广播让歌词窗与设置页双向同步。
+- 猜你喜欢：本地推荐（口味画像 + 轮转交错 + 分批），服务端每日推荐接口对公开请求形态一律 400，因此不伪造服务端流。
+- 回归：typecheck；离线单测 **245/245**；`test:electron` smoke / ui / business / favorites / recommend / glass / taskbar / lyrics / callback / cancel / storage 全部通过；Windows 11 本机 NSIS 构建产出 `huawei-music-desktop-0.0.2-win-x64-custom-setup.exe`（未签名，静态检查 `matchesCurrentBuild=true`）。**实机安装、真实账号登录与真实歌词仍未验收**；安装包与源码已上传 GitHub Release。
 
 ## 运行与剩余参与点
 

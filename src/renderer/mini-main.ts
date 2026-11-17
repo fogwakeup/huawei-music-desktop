@@ -8,11 +8,20 @@ declare global {
       command(command: MiniPlayerCommand): void;
       requestClose(): void;
       savePosition(position: { x: number; y: number }): void;
+      dragStart(): void;
+      dragMove(): void;
+      endDrag(): void;
     };
   }
 }
 
 const byId = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+
+// The main process loads this page with ?mode=taskbar|float; the same markup serves both
+// presentations, and CSS owns the difference (slim taskbar strip vs floating capsule).
+const mode = new URLSearchParams(window.location.search).get('mode') === 'float' ? 'float' : 'taskbar';
+document.body.classList.add(`mode-${mode}`);
+
 const title = byId('mini-title');
 const artist = byId('mini-artist');
 const cover = byId<HTMLImageElement>('mini-cover');
@@ -72,7 +81,32 @@ cover.addEventListener('error', () => {
   cover.hidden = true;
   coverIcon.hidden = false;
 });
-byId('mini-info').addEventListener('dblclick', () => window.desktopMiniPlayer.command('show-main'));
+// Dragging is handled in the renderer: the bar is deliberately non-focusable so it never steals
+// focus from the app in use, and such a window cannot start a native title-bar drag. The renderer
+// only reports the gesture; the main process follows the OS cursor, so a window sliding under a
+// stationary pointer cannot feed bogus offsets back into the movement.
+const handle = byId('mini-info');
+let dragging = false;
+handle.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  dragging = true;
+  handle.setPointerCapture(event.pointerId);
+  document.body.classList.add('dragging');
+  window.desktopMiniPlayer.dragStart();
+});
+handle.addEventListener('pointermove', () => {
+  if (!dragging) return;
+  window.desktopMiniPlayer.dragMove();
+});
+const stopDragging = (): void => {
+  if (!dragging) return;
+  dragging = false;
+  document.body.classList.remove('dragging');
+  window.desktopMiniPlayer.endDrag();
+};
+handle.addEventListener('pointerup', stopDragging);
+handle.addEventListener('pointercancel', stopDragging);
+handle.addEventListener('dblclick', () => window.desktopMiniPlayer.command('show-main'));
 transport.addEventListener('click', event => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
   const action = button?.dataset.action;

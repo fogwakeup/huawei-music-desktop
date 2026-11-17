@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeMiniPlayerState } from '../src/main/mini-player-payload.mjs';
 import { sanitizeMiniPlayer, sanitizeSettings } from '../src/main/settings.mjs';
-import { clampRectangle, dockPosition } from '../src/main/mini-player-layout.mjs';
+import { clampRectangle, dockPosition, taskbarBarRect, taskbarStrip } from '../src/main/mini-player-layout.mjs';
 
 const COVER = 'https://img.kuke.com/cover/123.jpg';
 
@@ -28,18 +28,24 @@ test('mini player state never forwards unsafe URLs or oversized text', () => {
   assert.equal(sanitizeMiniPlayerState(null), null);
 });
 
-test('mini player settings sanitize the on/off flag and saved position', () => {
-  assert.deepEqual(sanitizeMiniPlayer(null), { enabled: true, position: null });
+test('mini player settings sanitize the on/off flag, saved position and taskbar anchor', () => {
+  assert.deepEqual(sanitizeMiniPlayer(null),
+    { enabled: true, position: null, embedInTaskbar: true, taskbarX: null });
   assert.deepEqual(sanitizeMiniPlayer({ enabled: false, position: { x: 12, y: 40 } }),
-    { enabled: false, position: { x: 12, y: 40 } });
+    { enabled: false, position: { x: 12, y: 40 }, embedInTaskbar: true, taskbarX: null });
   assert.equal(sanitizeMiniPlayer({ position: { x: 1.5, y: 40 } }).position, null, 'fractional coords rejected');
   assert.equal(sanitizeMiniPlayer({ position: { x: 999999, y: 0 } }).position, null, 'off-screen coords rejected');
+  assert.equal(sanitizeMiniPlayer({ embedInTaskbar: 'yes' }).embedInTaskbar, true, 'non-boolean mode ignored');
+  assert.equal(sanitizeMiniPlayer({ embedInTaskbar: false }).embedInTaskbar, false);
+  assert.equal(sanitizeMiniPlayer({ taskbarX: 999999 }).taskbarX, null, 'wild taskbar anchor rejected');
+  assert.equal(sanitizeMiniPlayer({ taskbarX: 1500 }).taskbarX, 1500);
 });
 
 test('settings default enables the desktop mini bar and tray close behaviour', () => {
   const next = sanitizeSettings({ miniPlayer: { enabled: false, position: { x: 5, y: 6 } } });
-  assert.deepEqual(next.miniPlayer, { enabled: false, position: { x: 5, y: 6 } });
-  assert.deepEqual(sanitizeSettings({ volume: 0.4 }).miniPlayer, { enabled: true, position: null });
+  assert.deepEqual(next.miniPlayer, { enabled: false, position: { x: 5, y: 6 }, embedInTaskbar: true, taskbarX: null });
+  assert.deepEqual(sanitizeSettings({ volume: 0.4 }).miniPlayer,
+    { enabled: true, position: null, embedInTaskbar: true, taskbarX: null });
   assert.equal(sanitizeSettings(null).closeBehavior, 'tray');
 });
 
@@ -61,4 +67,55 @@ test('clampRectangle handles a work area smaller than the bar without going nega
 
 test('dockPosition centers horizontally and sits above the taskbar', () => {
   assert.deepEqual(dockPosition(AREA, 8, SIZE), { x: 680, y: 966 });
+});
+
+// --- Taskbar presentation ---------------------------------------------------
+const BOUNDS = { x: 0, y: 0, width: 1920, height: 1080 };
+const WORK = { x: 0, y: 0, width: 1920, height: 1032 }; // 48px bottom taskbar
+
+test('taskbarStrip derives the bottom taskbar band from bounds minus work area', () => {
+  assert.deepEqual(taskbarStrip(BOUNDS, WORK), {
+    edge: 'bottom',
+    rect: { x: 0, y: 1032, width: 1920, height: 48 },
+  });
+});
+
+test('taskbarStrip handles top, left and right taskbars', () => {
+  assert.deepEqual(taskbarStrip(BOUNDS, { x: 0, y: 48, width: 1920, height: 1032 }).rect,
+    { x: 0, y: 0, width: 1920, height: 48 });
+  assert.deepEqual(taskbarStrip(BOUNDS, { x: 48, y: 0, width: 1872, height: 1080 }),
+    { edge: 'left', rect: { x: 0, y: 0, width: 48, height: 1080 } });
+  assert.deepEqual(taskbarStrip(BOUNDS, { x: 0, y: 0, width: 1872, height: 1080 }),
+    { edge: 'right', rect: { x: 1872, y: 0, width: 48, height: 1080 } });
+});
+
+test('taskbarStrip falls back to a bottom band when the taskbar auto-hides', () => {
+  // Auto-hide reports workArea == bounds, so no inset survives.
+  const strip = taskbarStrip(BOUNDS, BOUNDS);
+  assert.equal(strip.edge, 'bottom');
+  assert.deepEqual(strip.rect, { x: 0, y: 1032, width: 1920, height: 48 });
+});
+
+test('taskbarBarRect sits inside the band and keeps a margin from the edges', () => {
+  const strip = taskbarStrip(BOUNDS, WORK);
+  const rect = taskbarBarRect(strip, { width: 420, height: 40 }, null);
+  assert.equal(rect.height, 40, 'bar height capped by the taskbar band');
+  assert.ok(rect.y >= 1032 && rect.y + rect.height <= 1080, 'bar stays on the taskbar');
+  assert.equal(rect.width, 420);
+  // Default slot leaves room for the clock/tray on the right.
+  assert.equal(rect.x, 1920 - 420 - 300);
+});
+
+test('taskbarBarRect clamps a dragged anchor into the band', () => {
+  const strip = taskbarStrip(BOUNDS, WORK);
+  assert.equal(taskbarBarRect(strip, { width: 420, height: 40 }, -500).x, 4);
+  assert.equal(taskbarBarRect(strip, { width: 420, height: 40 }, 5000).x, 1920 - 420 - 4);
+  assert.equal(taskbarBarRect(strip, { width: 420, height: 40 }, 600).x, 600);
+});
+
+test('taskbarBarRect shrinks the bar on a narrow taskbar band', () => {
+  const strip = { edge: 'left', rect: { x: 0, y: 0, width: 44, height: 1080 } };
+  const rect = taskbarBarRect(strip, { width: 420, height: 40 }, null);
+  assert.ok(rect.width <= 44 - 8, 'vertical taskbar: bar never wider than the band');
+  assert.ok(rect.x >= 4 && rect.x + rect.width <= 40, 'bar stays inside the vertical band');
 });

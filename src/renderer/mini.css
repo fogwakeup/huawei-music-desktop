@@ -34,9 +34,10 @@ html, body {
   min-width: 0;
   flex: 1 1 auto;
   height: 100%;
-  -webkit-app-region: drag;
-  cursor: default;
+  cursor: grab;
 }
+
+body.dragging .mini-info { cursor: grabbing; }
 
 .mini-cover {
   display: grid;
@@ -105,4 +106,72 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .mini-controls button { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Taskbar presentation: the window is exactly the size of its taskbar slot, so
+   the pill fills it and blends with the taskbar material instead of floating.
+   Windows 11 dropped the DeskBand API, so the strip is a topmost window aligned
+   to the taskbar rectangle — visually indistinguishable from an embedded band.
+   --------------------------------------------------------------------------- */
+body.mode-taskbar .mini-bar {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  gap: 8px;
+  padding: 0 6px 0 5px;
+  border: 1px solid rgba(0, 0, 0, 0.055);
+  border-radius: 9px;
+  background: rgba(252, 252, 253, 0.55);
+  backdrop-filter: blur(26px) saturate(150%);
+  -webkit-backdrop-filter: blur(26px) saturate(150%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 2px rgba(20, 24, 32, 0.06);
+}
+
+body.mode-taskbar .mini-cover {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+body.mode-taskbar .mini-cover svg { width: 15px; height: 15px; }
+
+/* One line, like "歌名 · 艺人", so the strip stays as short as the taskbar is tall. */
+body.mode-taskbar .mini-text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+}
+
+body.mode-taskbar .mini-text small::before { content: '·'; margin-right: 5px; color: #a8adb6; }
+body.mode-taskbar .mini-text strong { font-size: 12px; line-height: 1.2; flex: 0 1 auto; }
+body.mode-taskbar .mini-text small { font-size: 11px; line-height: 1.2; flex: 0 1 auto; }
+
+body.mode-taskbar .mini-controls { gap: 2px; }
+body.mode-taskbar .mini-controls button { width: 26px; height: 26px; border-radius: 7px; }
+body.mode-taskbar .mini-controls button svg { width: 14px; height: 14px; }
+/* Keep the transport button round: the generic button rule above is more specific. */
+body.mode-taskbar .mini-controls button.mini-play { width: 27px; height: 27px; border-radius: 50%; }
+body.mode-taskbar .mini-controls .mini-play svg { width: 12px; height: 12px; }
+body.mode-taskbar .mini-controls .mini-close { width: 22px; height: 22px; }
+body.mode-taskbar .mini-divider { height: 16px; margin: 0 1px; }
+body.mode-taskbar .mini-lyric-glyph { font-size: 11px; }
+
+@media (prefers-color-scheme: dark) {
+  body.mode-taskbar { color: #eef1f6; }
+  body.mode-taskbar .mini-bar {
+    border-color: rgba(255, 255, 255, 0.09);
+    background: rgba(44, 46, 52, 0.62);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+  body.mode-taskbar .mini-text strong { color: #f3f5f9; }
+  body.mode-taskbar .mini-text small { color: #b9bfc9; }
+  body.mode-taskbar .mini-text small::before { color: #7f858f; }
+  body.mode-taskbar .mini-controls button { color: #d5d9e1; }
+  body.mode-taskbar .mini-controls button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  body.mode-taskbar .mini-divider { background: rgba(255, 255, 255, 0.16); }
+  body.mode-taskbar .mini-cover { background: linear-gradient(145deg, #33373f, #262a31); color: #9aa1ac; }
+  body.mode-taskbar .mini-controls .mini-close { color: #9aa1ac; }
 }

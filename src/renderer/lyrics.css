@@ -1,4 +1,16 @@
-/* Desktop lyrics overlay: transparent frameless always-on-top window. */
+/* Desktop lyrics overlay: a transparent frameless always-on-top window.
+   Nothing is painted behind the text unless the user enables 深色底板, so the overlay never
+   shows up as a black box over the desktop. --lyrics-panel-height must match the constant in
+   src/main/lyrics-layout.mjs (LYRICS_PANEL_HEIGHT): the window is enlarged by exactly that much
+   when the style panel opens. */
+:root {
+  --lyrics-font-size: 34px;
+  --lyrics-next-size: 17px;
+  --lyrics-font-color: #ffffff;
+  --lyrics-bg-opacity: 0.55;
+  --lyrics-panel-height: 208px;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
@@ -10,106 +22,226 @@ html, body {
 }
 
 .lyrics-overlay {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 4px 6px;
+  background: transparent;
+}
+
+.lyrics-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 6px;
-  width: 100%;
-  height: 100%;
-  padding: 10px 22px 14px;
-  border-radius: 16px;
-  background: rgba(16, 18, 22, var(--lyrics-bg-opacity, 0.55));
+  align-items: center;
+  gap: 4px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: transparent;
+  transition: background 0.18s ease;
+}
+
+/* The panel sits above the text block, which is why the text shifts down by its height. */
+.lyrics-overlay.panel-open .lyrics-body { margin-top: var(--lyrics-panel-height); }
+
+/* Opt-in plate: only drawn when the user asks for it. */
+.lyrics-overlay.has-bg .lyrics-body {
+  background: rgba(16, 18, 22, var(--lyrics-bg-opacity));
   backdrop-filter: blur(14px);
-  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.28);
-  transition: background 0.2s ease;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22);
 }
 
-.lyrics-overlay.locked .lyrics-bar { visibility: hidden; }
-/* Unlocked keeps the control bar readable even at a low chosen opacity. */
-.lyrics-overlay:not(.locked) {
-  background: rgba(16, 18, 22, min(1, calc(var(--lyrics-bg-opacity, 0.55) + 0.15)));
+.lyrics-current {
+  max-width: 100%;
+  font: 700 var(--lyrics-font-size)/1.25 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--lyrics-font-color);
+  text-align: center;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 0 18px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-/* Unlocked: the bar and the text are drag handles; buttons opt back out. */
-.lyrics-overlay:not(.locked) .lyrics-bar .lyrics-track,
-.lyrics-overlay:not(.locked) .lyrics-current,
-.lyrics-overlay:not(.locked) .lyrics-next {
-  -webkit-app-region: drag;
+.lyrics-current.empty {
+  font-size: calc(var(--lyrics-font-size) * 0.6);
+  font-weight: 400;
+  opacity: 0.75;
 }
-.lyrics-controls { -webkit-app-region: no-drag; }
 
+.lyrics-next {
+  max-width: 100%;
+  font: 400 var(--lyrics-next-size)/1.35 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--lyrics-font-color);
+  text-align: center;
+  opacity: 0.62;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Control strip: faint until the pointer is over the overlay, so it never fights the lyrics. */
 .lyrics-bar {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  right: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+  height: 24px;
+  /* Invisible until the pointer is over the overlay (or the panel is open), so the control strip
+     never sits on top of the lyric text while the user is just reading it. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
 }
+
+.lyrics-overlay:hover .lyrics-bar,
+.lyrics-overlay.panel-open .lyrics-bar,
+.lyrics-overlay.dragging .lyrics-bar { opacity: 1; pointer-events: auto; }
+.lyrics-overlay.locked .lyrics-bar { display: none; }
 
 .lyrics-track {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font: 500 12px/1.4 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font: 500 11px/1.4 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   letter-spacing: 0.04em;
-  color: var(--lyrics-font-color, #fff);
-  opacity: 0.6;
+  color: var(--lyrics-font-color);
+  opacity: 0.75;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: grab;
 }
 
-.lyrics-controls { display: flex; gap: 6px; }
+.lyrics-overlay.dragging .lyrics-track,
+.lyrics-overlay.dragging .lyrics-body { cursor: grabbing; }
+
+.lyrics-controls { display: flex; gap: 4px; flex: 0 0 auto; }
 
 .lyrics-controls button {
-  width: 26px;
+  width: 24px;
   height: 22px;
   display: grid;
   place-items: center;
   font: 600 11px/1 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: rgba(255, 255, 255, 0.75);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(24, 26, 32, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 7px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-.lyrics-controls button:hover {
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
+.lyrics-controls button:hover { background: rgba(40, 44, 52, 0.85); color: #fff; }
+.lyrics-controls button.active { background: rgba(120, 170, 255, 0.32); border-color: rgba(150, 190, 255, 0.6); }
+
+/* Style panel — a compact card floating above the lyrics. */
+.lyrics-panel {
+  position: absolute;
+  top: 30px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(22, 24, 30, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: #eef1f6;
+  backdrop-filter: blur(24px);
 }
 
-.lyrics-current {
-  min-height: 40px;
+.lyrics-panel[hidden] { display: none; }
+
+.panel-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  font: 700 30px/1.25 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: var(--lyrics-font-color, #fff);
-  text-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 0 14px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  width: 100%;
+  gap: 8px;
+  min-height: 24px;
+  font: 500 11px/1.2 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
-.lyrics-current.empty {
-  font-weight: 400;
-  font-size: 20px;
-  opacity: 0.55;
+.panel-label { flex: 0 0 34px; color: rgba(238, 241, 246, 0.66); }
+.panel-value { flex: 0 0 46px; text-align: right; color: rgba(238, 241, 246, 0.6); font-variant-numeric: tabular-nums; }
+
+.panel-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  accent-color: #7aa2ff;
+  cursor: pointer;
 }
 
-.lyrics-next {
-  min-height: 18px;
-  text-align: center;
-  font: 400 13px/1.4 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: var(--lyrics-font-color, #fff);
-  opacity: 0.5;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.panel-swatches { display: flex; align-items: center; gap: 6px; }
+
+.panel-swatches button {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  padding: 0;
 }
+
+.panel-swatches button[aria-pressed='true'] { box-shadow: 0 0 0 2px rgba(122, 162, 255, 0.9); }
+
+.panel-swatches label {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  background: conic-gradient(#ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c26bff, #ff6b6b);
+}
+
+.panel-swatches input[type='color'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.panel-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  color: rgba(238, 241, 246, 0.86);
+  cursor: pointer;
+}
+
+.panel-check input { accent-color: #7aa2ff; cursor: pointer; }
+
+.panel-actions { justify-content: flex-end; gap: 6px; }
+
+.panel-button {
+  height: 22px;
+  padding: 0 10px;
+  font: 500 11px/1 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: rgba(238, 241, 246, 0.9);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.panel-button:hover { background: rgba(255, 255, 255, 0.16); }
+.panel-button.primary { background: rgba(122, 162, 255, 0.85); border-color: rgba(150, 190, 255, 0.9); color: #0d1220; }
+.panel-button.primary:hover { background: rgba(140, 175, 255, 0.95); }
 
 @media (prefers-reduced-motion: reduce) {
-  .lyrics-overlay { transition: none; }
+  .lyrics-body, .lyrics-bar, .lyrics-controls button { transition: none; }
 }

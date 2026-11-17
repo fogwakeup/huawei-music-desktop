@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Heart, Headphones, History, ListMusic, LogIn, LogOut, Minimize2, Search, Settings as SettingsIcon, Sparkles,
+  Heart, Headphones, History, ListMusic, LogIn, LogOut, Minus, Minimize2, Search,
+  Settings as SettingsIcon, Sparkles, Square, X,
 } from 'lucide-react';
 import { LyricsPanel, LyricsStage, PlayerBar, QueuePanel } from './components';
 import {
@@ -20,7 +21,7 @@ import { activeLyricIndex } from '../lyrics.mjs';
 import { fontStackFor, tintFromHex } from './theme.mjs';
 import { canRetryMediaFailure, mediaFailureResumeAt, reconcileTrackIndexes } from './track-reconcile.mjs';
 import type {
-  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, LyricsDoc, Playback, PlayerCommand, Playlist, Quality, Result, SavedQueue, Track, TrackQuality,
+  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, GlassSettings, LyricsDoc, Playback, PlayerCommand, Playlist, Quality, Result, SavedQueue, Track, TrackQuality,
 } from '../shared/types';
 
 type View =
@@ -76,6 +77,39 @@ function applyAppearance(appearance: AppearanceSettings | undefined) {
   root.setProperty('--font-ui', appearance.fontFamily === 'custom'
     ? fontStackFor(appearance.customFont, FONT_STACKS.sans)
     : FONT_STACKS[appearance.fontFamily] ?? FONT_STACKS.sans);
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const value = /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#ffffff';
+  return {
+    r: parseInt(value.slice(1, 3), 16),
+    g: parseInt(value.slice(3, 5), 16),
+    b: parseInt(value.slice(5, 7), 16),
+  };
+}
+
+function applyGlass(glass: GlassSettings | undefined) {
+  if (!glass) return;
+  const root = document.documentElement.style;
+  const bg = hexToRgb(glass.backgroundColor);
+  const border = hexToRgb(glass.borderColor);
+  root.setProperty('--glass-blur', `${glass.blur}px`);
+  root.setProperty('--glass-opacity', String(glass.opacity));
+  root.setProperty('--glass-saturate', String(glass.saturate));
+  root.setProperty('--glass-bg-r', String(bg.r));
+  root.setProperty('--glass-bg-g', String(bg.g));
+  root.setProperty('--glass-bg-b', String(bg.b));
+  root.setProperty('--glass-radius', `${glass.radius}px`);
+  root.setProperty('--glass-border-width', `${glass.borderWidth}px`);
+  root.setProperty('--glass-border-r', String(border.r));
+  root.setProperty('--glass-border-g', String(border.g));
+  root.setProperty('--glass-border-b', String(border.b));
+  root.setProperty('--glass-border-opacity', String(glass.borderOpacity));
+  root.setProperty('--glass-shadow-size', `${glass.shadowSize}px`);
+  root.setProperty('--glass-shadow-opacity', String(glass.shadowOpacity));
+  // Only strict data:image/...;base64 values reach here (sanitized in main). Quoting is safe
+  // because base64 contains no quotes or parentheses.
+  root.setProperty('--bg-image', glass.backgroundImage ? `url("${glass.backgroundImage}")` : 'none');
 }
 
 const HISTORY_KEY = 'local-play-history';
@@ -187,6 +221,8 @@ export function App() {
   useEffect(() => {
     const unsubscribeProgress = window.desktop.auth.onProgress(setMessage);
     const unsubscribeNotice = window.desktop.onNotice(setMessage);
+    // The lyrics overlay writes its own style settings; keep the settings page in step.
+    const unsubscribeSettings = window.desktop.onSettingsChanged(applySettings);
     const unsubscribeCommand = window.desktop.player.onCommand(command => {
       playCommand.current[command]();
     });
@@ -220,7 +256,7 @@ export function App() {
       setQueueReady(true);
     })();
     return () => {
-      unsubscribeProgress(); unsubscribeNotice(); unsubscribeCommand();
+      unsubscribeProgress(); unsubscribeNotice(); unsubscribeCommand(); unsubscribeSettings();
       window.clearTimeout(saveTimer.current); window.clearTimeout(positionTimer.current);
     };
   }, []);
@@ -304,6 +340,7 @@ export function App() {
   useEffect(() => { if (audio.current) audio.current.volume = volume; }, [volume]);
 
   useEffect(() => { applyAppearance(settings?.appearance); }, [settings?.appearance]);
+  useEffect(() => { applyGlass(settings?.glass); }, [settings?.glass]);
 
   // Persist the queue without any playback URL; the renderer only stores what the IPC accepts.
   function persistQueue() {
@@ -779,7 +816,10 @@ export function App() {
   }
 
   async function toggleDesktopLyrics() {
-    const current = settings?.desktopLyrics ?? { enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 };
+    const current = settings?.desktopLyrics ?? {
+      enabled: false, locked: false, position: null, fontColor: '#ffffff',
+      showBackground: false, backgroundOpacity: 0.55, fontSize: 34, width: 760,
+    };
     const enabled = !current.enabled;
     if (await updateSettings({ desktopLyrics: { ...current, enabled } })) {
       setMessage(enabled ? '已开启桌面歌词，悬浮窗会跟随当前播放显示。' : '已关闭桌面歌词。');
@@ -787,10 +827,10 @@ export function App() {
   }
 
   async function toggleMiniPlayer() {
-    const current = settings?.miniPlayer ?? { enabled: true, position: null };
+    const current = settings?.miniPlayer ?? { enabled: true, position: null, embedInTaskbar: true, taskbarX: null };
     const enabled = !current.enabled;
     if (await updateSettings({ miniPlayer: { ...current, enabled } })) {
-      setMessage(enabled ? '已显示桌面状态栏播控条。' : '已隐藏桌面状态栏播控条。');
+      setMessage(enabled ? '已显示任务栏播控条。' : '已隐藏任务栏播控条。');
     }
   }
 
@@ -939,7 +979,17 @@ export function App() {
           : view.name === 'history' ? '本机记录与华为服务端记录'
             : view.name === 'settings' ? '播放、界面与隐私偏好'
               : '';
-  return <div className={`app-shell ${panelOpen ? 'has-panel' : ''}`}>
+  return <>
+    <div className="app-backdrop" aria-hidden="true" />
+    <div className="window-titlebar">
+      <div className="titlebar-brand"><Headphones size={14} /><span>{APP_BRAND_LABEL}</span></div>
+      <div className="window-buttons">
+        <button aria-label="最小化窗口" title="最小化" onClick={() => void window.desktop.window.minimize()}><Minus size={15} /></button>
+        <button aria-label="最大化或还原窗口" title="最大化 / 还原" onClick={() => void window.desktop.window.toggleMaximize()}><Square size={12} /></button>
+        <button aria-label="关闭窗口" title="关闭" className="close" onClick={() => void window.desktop.window.close()}><X size={15} /></button>
+      </div>
+    </div>
+    <div className={`app-shell ${panelOpen ? 'has-panel' : ''}`}>
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark"><Headphones size={19} /></span>
@@ -990,41 +1040,6 @@ export function App() {
         : renderPage()}
       {status?.authenticated && <FavoritesPage key={accountVersion} ctx={ctx} active={view.name === 'favorites'} />}
     </main>
-    {loginOpen && <div className="login-bar" role="status">
-      <span>正在官方页面完成扫码授权，完成后自动返回。</span>
-      <button className="ghost" onClick={() => void cancelLogin()}>取消登录</button>
-    </div>}
-    {lyricsOpen && <LyricsPanel
-      doc={lyrics}
-      loading={lyricsLoading}
-      positionSeconds={position}
-      offsetSeconds={lyricOffset}
-      onSeekTo={seekToLyric}
-      onOpenStage={() => setStageOpen(true)}
-      onImport={() => void importLocalLyrics()}
-      onRemoveLocal={() => void removeLocalLyrics()}
-      onClose={() => setLyricsOpen(false)}
-    />}
-    {queueOpen && <QueuePanel tracks={queue} currentId={currentTrack?.id ?? null} onSelect={queueIndex => { const at = order.current.indexOf(queueIndex); void playAt(at < 0 ? 0 : at); }} onClose={() => setQueueOpen(false)} />}
-    {stageOpen && <LyricsStage
-      track={currentTrack}
-      doc={lyrics}
-      loading={lyricsLoading}
-      positionSeconds={position}
-      offsetSeconds={lyricOffset}
-      playing={playing}
-      duration={duration}
-      disabled={!queue.length}
-      onSeekTo={seekToLyric}
-      onSeekSeconds={seekAudio}
-      onToggle={togglePlayback}
-      onPrevious={goPrevious}
-      onNext={goNext}
-      onOffset={changeLyricOffset}
-      onImport={() => void importLocalLyrics()}
-      onRemoveLocal={() => void removeLocalLyrics()}
-      onClose={() => setStageOpen(false)}
-    />}
     <PlayerBar
       track={currentTrack}
       playing={playing}
@@ -1062,5 +1077,43 @@ export function App() {
       favorite={currentTrack ? favoriteOf(currentTrack.id) : undefined}
       onToggleFavorite={() => { if (currentTrack) void toggleFavorite(currentTrack, !favoriteOf(currentTrack.id)); }}
     />
-  </div>;
+    </div>
+    {/* Overlays live outside the shell stacking context so their z-index still beats the
+        frameless glass titlebar (notably the login cancel bar at the top of the window). */}
+    {loginOpen && <div className="login-bar" role="status">
+      <span>正在官方页面完成扫码授权，完成后自动返回。</span>
+      <button className="ghost" onClick={() => void cancelLogin()}>取消登录</button>
+    </div>}
+    {lyricsOpen && <LyricsPanel
+      doc={lyrics}
+      loading={lyricsLoading}
+      positionSeconds={position}
+      offsetSeconds={lyricOffset}
+      onSeekTo={seekToLyric}
+      onOpenStage={() => setStageOpen(true)}
+      onImport={() => void importLocalLyrics()}
+      onRemoveLocal={() => void removeLocalLyrics()}
+      onClose={() => setLyricsOpen(false)}
+    />}
+    {queueOpen && <QueuePanel tracks={queue} currentId={currentTrack?.id ?? null} onSelect={queueIndex => { const at = order.current.indexOf(queueIndex); void playAt(at < 0 ? 0 : at); }} onClose={() => setQueueOpen(false)} />}
+    {stageOpen && <LyricsStage
+      track={currentTrack}
+      doc={lyrics}
+      loading={lyricsLoading}
+      positionSeconds={position}
+      offsetSeconds={lyricOffset}
+      playing={playing}
+      duration={duration}
+      disabled={!queue.length}
+      onSeekTo={seekToLyric}
+      onSeekSeconds={seekAudio}
+      onToggle={togglePlayback}
+      onPrevious={goPrevious}
+      onNext={goNext}
+      onOffset={changeLyricOffset}
+      onImport={() => void importLocalLyrics()}
+      onRemoveLocal={() => void removeLocalLyrics()}
+      onClose={() => setStageOpen(false)}
+    />}
+  </>;
 }

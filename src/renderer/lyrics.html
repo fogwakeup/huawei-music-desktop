@@ -8,15 +8,46 @@
   </head>
   <body>
     <div id="lyrics" class="lyrics-overlay locked">
+      <!-- Overlay strip: hidden while locked so only the text remains on screen. -->
       <div class="lyrics-bar" id="lyrics-bar">
         <span class="lyrics-track" id="lyrics-track">桌面歌词</span>
         <span class="lyrics-controls">
+          <button id="lyrics-style" title="调整字号、颜色与背景">⚙</button>
           <button id="lyrics-lock" title="锁定：鼠标穿透，不再挡住下面的窗口">🔒</button>
           <button id="lyrics-close" title="关闭桌面歌词">✕</button>
         </span>
       </div>
-      <p class="lyrics-current" id="lyrics-current">打开桌面歌词后，这里会跟随播放显示歌词</p>
-      <p class="lyrics-next" id="lyrics-next"></p>
+
+      <div class="lyrics-panel" id="lyrics-panel" hidden>
+        <div class="panel-row">
+          <span class="panel-label">字号</span>
+          <input id="opt-size" type="range" min="16" max="96" step="1" aria-label="歌词字号" />
+          <output id="opt-size-value" class="panel-value">34</output>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">宽度</span>
+          <input id="opt-width" type="range" min="280" max="2000" step="20" aria-label="歌词宽度" />
+          <output id="opt-width-value" class="panel-value">760</output>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">颜色</span>
+          <span class="panel-swatches" id="opt-colors" role="group" aria-label="歌词颜色"></span>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">背景</span>
+          <label class="panel-check"><input id="opt-bg" type="checkbox" aria-label="显示歌词底板" /> 深色底板</label>
+          <input id="opt-opacity" type="range" min="0" max="1" step="0.05" aria-label="歌词底板不透明度" />
+        </div>
+        <div class="panel-row panel-actions">
+          <button id="opt-reset" class="panel-button">恢复默认</button>
+          <button id="opt-done" class="panel-button primary">完成</button>
+        </div>
+      </div>
+
+      <div class="lyrics-body" id="lyrics-body">
+        <p class="lyrics-current" id="lyrics-current">桌面歌词已就绪</p>
+        <p class="lyrics-next" id="lyrics-next"></p>
+      </div>
     </div>
     <script type="module" src="/lyrics-main.ts"></script>
   </body>

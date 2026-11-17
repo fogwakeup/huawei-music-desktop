@@ -116,22 +116,35 @@ export type MiniPlayerState = {
 export type ShortcutsSettings = Record<ShortcutAction, string>;
 
 // Desktop lyrics overlay window: enabled toggles the window, locked enables mouse pass-through,
-// position persists the last dragged spot (work-area coordinates). fontColor is a #rrggbb hex
-// and backgroundOpacity is the overlay capsule alpha (0 = invisible, 1 = solid).
+// position persists the last dragged spot (work-area coordinates). fontColor is a #rrggbb hex.
+// The plate behind the lines is opt-in (showBackground) because most people want bare text
+// floating on the desktop; backgroundOpacity only applies once that plate is enabled.
 export type DesktopLyricsSettings = {
   enabled: boolean;
   locked: boolean;
   position: { x: number; y: number } | null;
   fontColor: string;
+  showBackground: boolean;
   backgroundOpacity: number;
+  /** px size of the current lyric line; the next line scales with it. */
+  fontSize: number;
+  /** Window width in px. */
+  width: number;
 };
 
 // Appearance pushed to the lyrics window on every settings apply.
 export type DesktopLyricsAppearance = {
   locked: boolean;
   fontColor: string;
+  showBackground: boolean;
   backgroundOpacity: number;
+  fontSize: number;
+  width: number;
 };
+
+// Partial look-and-feel update sent from the overlay's own style panel.
+export type DesktopLyricsStylePatch = Partial<Pick<DesktopLyricsSettings,
+  'fontColor' | 'showBackground' | 'backgroundOpacity' | 'fontSize' | 'width'>>;
 
 // Payload the main window renderer pushes to the lyrics window on every line change.
 export type DesktopLyricsUpdate = {
@@ -157,10 +170,33 @@ export type AppearanceSettings = {
   customFont: string;
 };
 
-// Compact always-on-top playback bar docked near the bottom of the desktop.
+// User-tunable frosted-glass surface applied to the floating panels. Values mirror the
+// generator in the docs: blur px, opacity 0-1, saturate 0-2, radius/border/shadow px.
+export type GlassSettings = {
+  blur: number;
+  opacity: number;
+  saturate: number;
+  backgroundColor: string;   // #rrggbb tint mixed with opacity
+  radius: number;
+  borderWidth: number;
+  borderColor: string;       // #rrggbb
+  borderOpacity: number;
+  shadowSize: number;
+  shadowOpacity: number;
+  /** data:image/...;base64,... for the bottom-most backdrop, or '' for none. */
+  backgroundImage: string;
+};
+
+// Always-on-top playback bar. Two presentations share one renderer: 'taskbar' draws a slim strip
+// on the taskbar band (default), 'float' is the draggable capsule docked above the taskbar.
 export type MiniPlayerSettings = {
   enabled: boolean;
+  /** Anchor of the floating capsule; ignored while embedInTaskbar is on. */
   position: { x: number; y: number } | null;
+  /** Render the strip on the taskbar instead of a floating capsule. */
+  embedInTaskbar: boolean;
+  /** Left edge of the strip along a horizontal taskbar; null keeps the default right-hand slot. */
+  taskbarX: number | null;
 };
 
 export type AppSettings = {
@@ -170,6 +206,8 @@ export type AppSettings = {
   repeatMode: RepeatMode;
   shuffle: boolean;
   appearance: AppearanceSettings;
+  // User-tunable frosted-glass panels and bottom-layer background image.
+  glass: GlassSettings;
   // Report real playback to Huawei history. Endpoint shape comes from the public H5 bundle;
   // real-account acceptance is still pending, so failures stay silent and are never retried.
   syncHistory: boolean;
@@ -224,6 +262,8 @@ export type DesktopApi = {
   settings: {
     get(): Promise<Result<AppSettings>>;
     update(input: Partial<AppSettings>): Promise<Result<AppSettings>>;
+    /** Opens a native picker for a background image; resolves a data URL or null on cancel. */
+    pickBackgroundImage(): Promise<Result<string | null>>;
   };
   queue: {
     load(): Promise<Result<SavedQueue | null>>;
@@ -231,6 +271,8 @@ export type DesktopApi = {
   };
   window: {
     minimize(): Promise<void>;
+    toggleMaximize(): Promise<void>;
+    close(): Promise<void>;
     hideToTray(): Promise<void>;
     setCloseBehavior(input: 'quit' | 'tray'): Promise<Result<AppSettings>>;
   };
@@ -248,6 +290,7 @@ export type DesktopApi = {
   desktopLyrics: { update(input: DesktopLyricsUpdate): void };
   miniPlayer: { update(input: MiniPlayerState): void };
   onNotice(listener: (message: string) => void): () => void;
+  onSettingsChanged(listener: (settings: AppSettings) => void): () => void;
 };
 
 declare global { interface Window { desktop: DesktopApi } }

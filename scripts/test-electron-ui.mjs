@@ -39,7 +39,7 @@ async function assertQueueContents(page) {
   await items.first().waitFor({ timeout: 5000 });
   // Compare titles only; the row also renders the artist line.
   assert.deepEqual(await items.locator('span').allInnerTexts(), ['Smoke MP3', 'Smoke FLAC'], 'restored queue lost tracks');
-  await page.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
 }
 
 async function installHandlers(instance, urls) {
@@ -129,7 +129,7 @@ try {
     nodeProcess: typeof process,
     genericInvoke: typeof window.desktop?.invoke,
   }));
-  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
+  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'onSettingsChanged', 'player', 'queue', 'settings', 'window']);
   assert.deepEqual(boundary.musicKeys, ['album', 'artist', 'createPlaylist', 'deletePlaylist', 'favoriteState', 'favorites', 'favoritesSummary', 'history', 'lyrics',
     'playlistDetail', 'playlists', 'reportPlayback', 'resolvePlayback', 'search', 'setFavorite', 'updatePlaylistDescription']);
   assert.equal(boundary.nodeProcess, 'undefined');
@@ -234,7 +234,7 @@ try {
   await page.getByRole('button', { name: '播放队列' }).click();
   await page.locator('.side-panel[aria-label="播放队列"]').waitFor({ timeout: 5000 });
   assert.equal(await page.locator('.side-panel[aria-label="歌词"]').count(), 0, 'opening the queue should close the lyrics panel');
-  await page.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
 
   // Repeat mode cycles through the three documented states.
   await page.getByRole('button', { name: '顺序播放' }).click();
@@ -366,7 +366,7 @@ try {
   await page.screenshot({ path: join(screenshots, 'linux-settings-960.png') });
   await page.getByRole('button', { name: '播放队列' }).click();
   await page.screenshot({ path: join(screenshots, 'linux-queue-960.png') });
-  await page.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1180, 760));
   await page.getByRole('button', { name: '我的收藏' }).click();
   await page.getByRole('button', { name: /^Smoke MP3/ }).waitFor();

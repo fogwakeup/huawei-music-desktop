@@ -5,6 +5,7 @@ import { loadQueue, loadSettings, saveQueue, updateSettings } from './storage';
 import { listSystemFonts } from './system-fonts';
 import { clearLyricsCache, lyricsCacheInfo, readLyricsFile, removeLocalLyrics, writeLocalLyrics } from './lyrics-cache';
 import { parseLyrics } from '../lyrics.mjs';
+import { readBackgroundImage } from './background-image.mjs';
 import { fail, ok } from '../shared/result';
 import { QUALITY_ORDER } from '../shared/qualities.mjs';
 import type { DesktopLyricsModule } from './desktop-lyrics';
@@ -167,6 +168,19 @@ export function registerIpc(
     hooks.onMiniPlayer?.(next);
     return ok(next);
   });
+  ipcMain.handle(channels.settingsPickBackground, async event => {
+    guard(event);
+    // Native picker is a pure local read; cancelling resolves to null rather than an error.
+    const picked = await dialog.showOpenDialog(window, {
+      title: '选择背景图片',
+      buttonLabel: '使用图片',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+    });
+    const filePath = picked.canceled ? undefined : picked.filePaths[0];
+    if (!filePath) return ok(null);
+    return ok(await readBackgroundImage(filePath));
+  });
   // One-way listeners must be idempotent: registerIpc runs again whenever the window is
   // recreated (macOS activate), and stacked listeners would double-forward every payload.
   ipcMain.removeAllListeners(channels.desktopLyricsUpdate);
@@ -232,6 +246,16 @@ export function registerIpc(
     return ok(next);
   });
   ipcMain.handle(channels.windowMinimize, async event => { guard(event); window.minimize(); });
+  ipcMain.handle(channels.windowToggleMaximize, async event => {
+    guard(event);
+    // The custom glass titlebar replaces the native one; keep window management accessible.
+    if (window.isMaximized()) window.unmaximize(); else window.maximize();
+  });
+  ipcMain.handle(channels.windowClose, async event => {
+    guard(event);
+    // Go through BrowserWindow.close() so the existing tray/quit preference still applies.
+    window.close();
+  });
   ipcMain.handle(channels.windowHideToTray, async event => {
     guard(event);
     hooks.onHideToTray?.();

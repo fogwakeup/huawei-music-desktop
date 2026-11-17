@@ -234,7 +234,7 @@ try {
   await page.getByRole('button', { name: '退出歌词页' }).click();
   await page.getByRole('button', { name: '播放队列' }).click();
   await shot('17-queue.png');
-  await page.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
 
   await page.getByRole('button', { name: '设置' }).click();
   await page.locator('.settings-nav-item', { hasText: '外观' }).click();

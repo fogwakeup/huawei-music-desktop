@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels } from '../shared/channels';
-import type { DesktopApi, DesktopLyricsUpdate, MiniPlayerState, PlayerCommand } from '../shared/types';
+import type { AppSettings, DesktopApi, DesktopLyricsUpdate, MiniPlayerState, PlayerCommand } from '../shared/types';
 
 const api: DesktopApi = {
   auth: {
@@ -35,6 +35,7 @@ const api: DesktopApi = {
   settings: {
     get: () => ipcRenderer.invoke(channels.settingsGet),
     update: input => ipcRenderer.invoke(channels.settingsUpdate, input),
+    pickBackgroundImage: () => ipcRenderer.invoke(channels.settingsPickBackground),
   },
   queue: {
     load: () => ipcRenderer.invoke(channels.queueLoad),
@@ -51,6 +52,8 @@ const api: DesktopApi = {
   },
   window: {
     minimize: () => ipcRenderer.invoke(channels.windowMinimize),
+    toggleMaximize: () => ipcRenderer.invoke(channels.windowToggleMaximize),
+    close: () => ipcRenderer.invoke(channels.windowClose),
     hideToTray: () => ipcRenderer.invoke(channels.windowHideToTray),
     setCloseBehavior: input => ipcRenderer.invoke(channels.windowSetCloseBehavior, input),
   },
@@ -72,6 +75,11 @@ const api: DesktopApi = {
     const wrapped = (_event: Electron.IpcRendererEvent, message: string) => listener(message);
     ipcRenderer.on(channels.appNotice, wrapped);
     return () => ipcRenderer.removeListener(channels.appNotice, wrapped);
+  },
+  onSettingsChanged: listener => {
+    const wrapped = (_event: Electron.IpcRendererEvent, settings: AppSettings) => listener(settings);
+    ipcRenderer.on(channels.settingsChanged, wrapped);
+    return () => ipcRenderer.removeListener(channels.settingsChanged, wrapped);
   },
 };
 

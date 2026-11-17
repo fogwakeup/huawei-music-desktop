@@ -21,6 +21,10 @@ export const channels = {
   musicDeletePlaylist: 'music:delete-playlist',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
+  settingsPickBackground: 'settings:pick-background',
+  // Push from the main process whenever settings are written outside the IPC handler, so the
+  // settings page reflects changes made from the lyrics overlay.
+  settingsChanged: 'settings:changed',
   fontsList: 'fonts:list',
   lyricsImport: 'lyrics:import',
   lyricsRemoveLocal: 'lyrics:remove-local',
@@ -29,6 +33,8 @@ export const channels = {
   queueLoad: 'queue:load',
   queueSave: 'queue:save',
   windowMinimize: 'window:minimize',
+  windowToggleMaximize: 'window:toggle-maximize',
+  windowClose: 'window:close',
   windowHideToTray: 'window:hide-to-tray',
   windowSetCloseBehavior: 'window:set-close-behavior',
   appQuit: 'app:quit',
@@ -39,12 +45,20 @@ export const channels = {
   miniPlayerCommand: 'mini-player:command',
   miniPlayerRequestClose: 'mini-player:request-close',
   miniPlayerSavePosition: 'mini-player:save-position',
+  miniPlayerDragStart: 'mini-player:drag-start',
+  miniPlayerDragMove: 'mini-player:drag-move',
+  miniPlayerDragEnd: 'mini-player:drag-end',
   desktopLyricsUpdate: 'desktop-lyrics:update',
   desktopLyricsRender: 'desktop-lyrics:render',
   desktopLyricsState: 'desktop-lyrics:state',
   desktopLyricsSetLocked: 'desktop-lyrics:set-locked',
   desktopLyricsRequestClose: 'desktop-lyrics:request-close',
   desktopLyricsSavePosition: 'desktop-lyrics:save-position',
+  desktopLyricsStyle: 'desktop-lyrics:style',
+  desktopLyricsPanel: 'desktop-lyrics:panel',
+  desktopLyricsDragStart: 'desktop-lyrics:drag-start',
+  desktopLyricsDragMove: 'desktop-lyrics:drag-move',
+  desktopLyricsDragEnd: 'desktop-lyrics:drag-end',
 } as const;
 
 export type Channel = (typeof channels)[keyof typeof channels];

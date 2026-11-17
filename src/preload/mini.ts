@@ -8,6 +8,9 @@ const RENDER_CHANNEL = 'mini-player:render';
 const COMMAND_CHANNEL = 'mini-player:command';
 const REQUEST_CLOSE_CHANNEL = 'mini-player:request-close';
 const SAVE_POSITION_CHANNEL = 'mini-player:save-position';
+const DRAG_START_CHANNEL = 'mini-player:drag-start';
+const DRAG_MOVE_CHANNEL = 'mini-player:drag-move';
+const DRAG_END_CHANNEL = 'mini-player:drag-end';
 
 const api = {
   onState: (listener: (state: MiniPlayerState) => void) => {
@@ -18,6 +21,11 @@ const api = {
   command: (command: MiniPlayerCommand) => { ipcRenderer.send(COMMAND_CHANNEL, command); },
   requestClose: () => { ipcRenderer.send(REQUEST_CLOSE_CHANNEL); },
   savePosition: (position: { x: number; y: number }) => { ipcRenderer.send(SAVE_POSITION_CHANNEL, position); },
+  // Pointer dragging is driven from the renderer because the bar never takes focus
+  // (WS_EX_NOACTIVATE), which a native app-region drag needs.
+  dragStart: () => { ipcRenderer.send(DRAG_START_CHANNEL); },
+  dragMove: () => { ipcRenderer.send(DRAG_MOVE_CHANNEL); },
+  endDrag: () => { ipcRenderer.send(DRAG_END_CHANNEL); },
 };
 
 contextBridge.exposeInMainWorld('desktopMiniPlayer', api);

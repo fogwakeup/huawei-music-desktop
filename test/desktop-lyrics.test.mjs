@@ -34,17 +34,24 @@ test('desktop lyrics payloads clamp long text and strip non-string fields', () =
   assert.equal(cleaned.next.translation.length, 500);
 });
 
+const DEFAULTS = {
+  enabled: true, locked: false, position: null, fontColor: '#ffffff',
+  showBackground: false, backgroundOpacity: 0.55, fontSize: 34, width: 760,
+};
+
 test('desktop lyrics settings sanitize flags, positions and appearance', () => {
-  assert.deepEqual(sanitizeDesktopLyrics(null),
-    { enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
+  assert.deepEqual(sanitizeDesktopLyrics(null), DEFAULTS);
   assert.deepEqual(sanitizeDesktopLyrics({ enabled: true, locked: 'x', position: { x: 10, y: 20 } }),
-    { enabled: true, locked: false, position: { x: 10, y: 20 }, fontColor: '#ffffff', backgroundOpacity: 0.55 });
+    { ...DEFAULTS, position: { x: 10, y: 20 } });
   assert.equal(sanitizeDesktopLyrics({ position: { x: 1.5, y: 20 } }).position, null, 'fractional coords rejected');
   assert.equal(sanitizeDesktopLyrics({ position: { x: 999999, y: 0 } }).position, null, 'off-screen coords rejected');
-  // Partial patch keeps stored fields.
-  assert.deepEqual(sanitizeDesktopLyrics({ locked: true }, { enabled: true, locked: false, position: { x: 1, y: 2 } }),
-    { enabled: true, locked: true, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 },
-    'a malformed position in a patch resets to null');
+  // A style-only patch keeps the stored spot: the overlay sends {fontSize} while the user drags a
+  // slider, and dropping the position would teleport the lyrics back to the default corner.
+  assert.deepEqual(sanitizeDesktopLyrics({ locked: true }, { ...DEFAULTS, position: { x: 1, y: 2 } }),
+    { ...DEFAULTS, locked: true, position: { x: 1, y: 2 } });
+  assert.equal(sanitizeDesktopLyrics({ fontSize: 40 }, { ...DEFAULTS, position: { x: 1, y: 2 } }).position.y, 2);
+  assert.equal(sanitizeDesktopLyrics({ position: null }, { ...DEFAULTS, position: { x: 1, y: 2 } }).position, null,
+    'an explicit null still resets the position');
 });
 
 test('desktop lyrics appearance fields are validated and clamped', () => {
@@ -55,18 +62,34 @@ test('desktop lyrics appearance fields are validated and clamped', () => {
   assert.equal(sanitizeDesktopLyrics({ backgroundOpacity: -2 }).backgroundOpacity, 0);
   assert.equal(sanitizeDesktopLyrics({ backgroundOpacity: Number.NaN }).backgroundOpacity, 0.55);
   assert.equal(sanitizeDesktopLyrics({ backgroundOpacity: 0.3 }).backgroundOpacity, 0.3);
+  // The plate is opt-in, so an untouched install draws no dark box behind the lyrics.
+  assert.equal(sanitizeDesktopLyrics(null).showBackground, false);
+  assert.equal(sanitizeDesktopLyrics({ showBackground: true }).showBackground, true);
+  assert.equal(sanitizeDesktopLyrics({ showBackground: 'yes' }).showBackground, false);
   // Stored settings that predate these fields still come back complete.
   const legacy = sanitizeDesktopLyrics(undefined, { enabled: true, locked: true, position: { x: 5, y: 5 } });
   assert.equal(legacy.fontColor, '#ffffff');
   assert.equal(legacy.backgroundOpacity, 0.55);
   assert.equal(legacy.enabled, true);
+  assert.equal(legacy.fontSize, 34);
+  assert.equal(legacy.width, 760);
+});
+
+test('desktop lyrics size settings are clamped to a usable range', () => {
+  assert.equal(sanitizeDesktopLyrics({ fontSize: 4 }).fontSize, 16);
+  assert.equal(sanitizeDesktopLyrics({ fontSize: 400 }).fontSize, 96);
+  assert.equal(sanitizeDesktopLyrics({ fontSize: 48.4 }).fontSize, 48, 'size is rounded to whole px');
+  assert.equal(sanitizeDesktopLyrics({ width: 10 }).width, 280);
+  assert.equal(sanitizeDesktopLyrics({ width: 99999 }).width, 2400);
+  assert.equal(sanitizeDesktopLyrics({ width: Number.NaN }).width, 760);
 });
 
 test('settings sanitize integrates the desktop lyrics block', () => {
   const next = sanitizeSettings({ desktopLyrics: { enabled: true, locked: true, position: { x: -8, y: 40 }, fontColor: '#FFE680', backgroundOpacity: 0.2 } });
-  assert.deepEqual(next.desktopLyrics,
-    { enabled: true, locked: true, position: { x: -8, y: 40 }, fontColor: '#ffe680', backgroundOpacity: 0.2 });
+  assert.deepEqual(next.desktopLyrics, {
+    enabled: true, locked: true, position: { x: -8, y: 40 }, fontColor: '#ffe680',
+    showBackground: false, backgroundOpacity: 0.2, fontSize: 34, width: 760,
+  });
   const untouched = sanitizeSettings({ volume: 0.4 });
-  assert.deepEqual(untouched.desktopLyrics,
-    { enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
+  assert.deepEqual(untouched.desktopLyrics, DEFAULTS);
 });

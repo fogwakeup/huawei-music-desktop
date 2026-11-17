@@ -2,6 +2,53 @@
 
 每条记录对照上一个提交，列出文件级与行为级变化。进度与验收视角见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+## 2026-11-17 — `8fea9a5` + 本轮（对比 `f8091a7`）
+
+主题：曲目右键菜单、桌面播控条（后续改为嵌入任务栏）、桌面歌词可调、毛玻璃主题与背景自定义、猜你喜欢推荐页。
+规模：两个阶段共 64 个文件次，+3300 / −390 行；离线单测 205 → **245** 项。
+
+### 新增文件
+
+| 文件 | 内容 |
+|---|---|
+| `src/renderer/recommend.mjs` / `recommend-page.tsx` | 本地推荐算法（口味画像、轮转池、分批）与「猜你喜欢」页 |
+| `src/main/lyrics-layout.mjs` + `test/lyrics-layout.test.mjs` | 歌词窗尺寸/贴边/面板生长/底边固定的纯几何逻辑 |
+| `src/main/background-image.mjs` + `test/background-image.test.mjs` | 背景图读入：扩展名白名单、≤3 MB、严格 `data:` URL（拒 SVG） |
+| `scripts/test-electron-taskbar.mjs` / `-lyrics.mjs` / `-glass.mjs` | 任务栏播控条、歌词窗、毛玻璃三套 Electron 端到端断言 |
+| `test/recommend.test.mjs` / `test/remove-from-queue.test.mjs` | 推荐交错与「移出队列」行为 |
+
+### 曲目右键菜单
+
+- 行级右键菜单（`src/renderer/components.tsx`）：播放 / 下一首播放 / 收藏 / 移出队列 / 从历史移除，按上下文裁剪菜单项。
+- 与既有行内按钮共用同一 IPC 通道，状态与收藏页、播放队列实时同步。
+
+### 桌面播控条 → 嵌入任务栏
+
+- `src/main/mini-player-layout.mjs` 新增 `taskbarStrip(bounds, workArea)`（推导任务栏四边与厚度，自动隐藏回退 48px）与 `taskbarBarRect()`（条入带内、横向钳制、托盘预留）。
+- `src/main/mini-player.ts` 重写：任务栏形态下 `move` 事件持续钉住竖轴、`moved` 落盘 `taskbarX`；显示器/工作区变化重算；5 秒置顶心跳；关闭按钮改为最小化到托盘。
+- 拖动改为 `drag-start/move/end` IPC：`focusable:false` 窗口收不到原生拖拽，改由渲染层报位移、主进程按 `screen.getCursorScreenPoint()` 跟随（同一套也用于歌词窗）。
+
+### 桌面歌词可调
+
+- 字号 16–96、宽度 280–2400、颜色（预设 + 取色器）、可选深色底板；窗口高度随字号推导，改字号时底边固定不漂移。
+- 默认纯文字**无底板**，样式/控制条仅悬停显示；锁定后 `display:none` + 鼠标穿透，黑框与面板一并消失。
+- 设置页与歌词窗双向同步：新增 `settings:changed` 广播，窗内改样式后主窗设置页立即刷新。
+
+### 毛玻璃主题与背景自定义
+
+- 全窗（含标题栏、侧栏）改为同一层毛玻璃；`GlassSettings` 暴露模糊/底色/不透明度/饱和度/圆角/描边/投影共 9 项 + 背景图。
+- 背景图经原生选择器读入主进程净化后转 `data:` URL 存设置，铺在最底层；修复「上传后背景不变」与设置页上滑重叠。
+- `sanitizeGlass` 对颜色做 HEX 白名单、数值全钳制，坏补丁不致整份设置被判损坏。
+
+### 猜你喜欢
+
+- 收藏歌曲 + 收藏歌单作种子建口味画像，取同歌手/同专辑候选，按频次轮转交错、剔除已收藏与无版权曲，分批 + 换一批。
+- 服务端每日推荐接口对公开请求形态一律 400，故全部在本地计算，不伪造服务端推荐。
+
+### 测试
+
+离线单测 245/245；`test:electron` smoke / ui / business / favorites / recommend / glass / taskbar / lyrics / callback / cancel / storage 全部通过；typecheck 通过。
+
 ## 2026-10-28 — `4fac4c9`（对比 `71d9213`）
 
 主题：按曲音质档位切换、搜索页播放全部、会话过期感知与 refresh_token 留存。

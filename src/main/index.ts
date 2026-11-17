@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, session,
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerIpc } from './ipc';
+import { channels } from '../shared/channels';
 import { AuthManager } from './auth-manager';
 import { createAuthManagerLifecycle } from './auth-manager-lifecycle.mjs';
 import { createDesktopLyricsModule } from './desktop-lyrics';
@@ -19,7 +20,11 @@ let tray: Tray | null = null;
 let quitting = false;
 let closeBehavior: AppSettings['closeBehavior'] = 'quit';
 const rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href;
-const desktopLyrics = createDesktopLyricsModule();
+const desktopLyrics = createDesktopLyricsModule({
+  onSettingsChanged: settings => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channels.settingsChanged, settings);
+  },
+});
 const miniPlayer = createMiniPlayerModule({
   onCommand: command => sendPlayerCommand(command),
   onShowMain: () => showMainWindow(),
@@ -42,6 +47,9 @@ async function createWindow(): Promise<void> {
     title: APP_DISPLAY_NAME,
     // No in-window menu bar on Windows/Linux; the menu is removed below.
     autoHideMenuBar: true,
+    // The native caption is always opaque on Windows, which breaks the frosted look. The renderer
+    // draws a glass drag strip instead; window controls go through guarded IPC channels.
+    frame: false,
     // Windows 11 glass: a system-drawn mica backdrop blended behind the translucent app shell.
     // The renderer keeps a translucent body so the material shows through. Setting the material
     // up front avoids a first-frame flash of an opaque window. Older Windows simply ignore it.

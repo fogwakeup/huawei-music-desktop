@@ -3,7 +3,7 @@ import { Disc3, ListMusic, Mic2, Play, Search as SearchIcon, Trash2 } from 'luci
 import { Cover, PlaylistGrid, TrackTable, type TrackActions } from './components';
 import { mergeFavoritesPage } from './favorites-pagination.mjs';
 import type {
-  AccentName, AlbumDetail, AppearanceSettings, ArtistDetail, AppSettings, FontChoice, LyricsCacheInfo, Playlist, Result, SavedQueue, Track,
+  AccentName, AlbumDetail, AppearanceSettings, ArtistDetail, AppSettings, FontChoice, GlassSettings, LyricsCacheInfo, Playlist, Result, SavedQueue, Track,
 } from '../shared/types';
 import { formatBytes } from '../shared/format.mjs';
 import { APP_DISPLAY_NAME } from '../shared/app-name.mjs';
@@ -393,7 +393,7 @@ export function HistoryPage({ ctx }: { ctx: LibraryContext }) {
 
 export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
   const settings = ctx.settings;
-  const [tab, setTab] = useState<'playback' | 'shortcuts' | 'appearance' | 'about'>('playback');
+  const [tab, setTab] = useState<'playback' | 'shortcuts' | 'appearance' | 'glass' | 'about'>('playback');
   const appearance = settings?.appearance;
   // Optimistic local copy: dragging a slider must repaint immediately instead of waiting for the
   // IPC round-trip, otherwise fast keyboard repeats read a stale value and drop steps.
@@ -446,6 +446,29 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
     void ctx.updateSettings({ appearance: next }).then(ok => { if (!ok) setDraft(undefined); });
   }
 
+  // Glass has its own optimistic draft so dragging a slider repaints from the same source the
+  // CSS variables read from, instead of waiting for each IPC round-trip.
+  const glassBase: GlassSettings = settings?.glass ?? {
+    blur: 0, opacity: 0.1, saturate: 0.51, backgroundColor: '#ffEBEB', radius: 20,
+    borderWidth: 0.5, borderColor: '#ffEBEB', borderOpacity: 0.3, shadowSize: 7,
+    shadowOpacity: 0.15, backgroundImage: '',
+  };
+  const [glassDraft, setGlassDraft] = useState<GlassSettings | undefined>(settings?.glass);
+  useEffect(() => { setGlassDraft(settings?.glass); }, [settings?.glass]);
+  const glassShown = glassDraft ?? glassBase;
+  function updateGlass(patch: Partial<GlassSettings>) {
+    const next = { ...glassShown, ...patch };
+    setGlassDraft(next);
+    void ctx.updateSettings({ glass: next }).then(ok => { if (!ok) setGlassDraft(undefined); });
+  }
+  async function pickBackground() {
+    const result = await window.desktop.settings.pickBackgroundImage().catch(() => null);
+    if (!result?.ok) { ctx.notice('读取图片失败，请重试。'); return; }
+    if (result.data === null) return; // cancelled
+    updateGlass({ backgroundImage: result.data });
+    ctx.notice('背景图片已应用。');
+  }
+
   function updateShortcut(action: ShortcutAction, value: string) {
     const current: ShortcutsSettings = settings?.shortcuts ?? { ...DEFAULT_SHORTCUTS };
     const next: ShortcutsSettings = { ...current, [action]: value };
@@ -461,10 +484,13 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
     void ctx.updateSettings({ shortcuts: next });
   }
 
+  const mini: AppSettings['miniPlayer'] = settings?.miniPlayer
+    ?? { enabled: true, position: null, embedInTaskbar: true, taskbarX: null };
   const tabs: { key: typeof tab; label: string }[] = [
     { key: 'playback', label: '播放' },
     { key: 'shortcuts', label: '快捷键' },
     { key: 'appearance', label: '外观' },
+    { key: 'glass', label: '毛玻璃' },
     { key: 'about', label: '关于' },
   ];
 
@@ -486,11 +512,19 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
         </label>
         <p className="hint">默认最小化到任务栏托盘，播放不中断；点击托盘图标即可恢复窗口。需要真正退出时选择「退出程序」。</p>
         <label>
-          <span>桌面状态栏播控</span>
-          <input type="checkbox" aria-label="桌面状态栏播控" checked={settings?.miniPlayer?.enabled ?? true}
-            onChange={event => void ctx.updateSettings({ miniPlayer: { ...(settings?.miniPlayer ?? { enabled: true, position: null }), enabled: event.target.checked } })} />
+          <span>任务栏播控条</span>
+          <input type="checkbox" aria-label="任务栏播控条" checked={mini.enabled}
+            onChange={event => void ctx.updateSettings({ miniPlayer: { ...mini, enabled: event.target.checked } })} />
         </label>
-        <p className="hint">在桌面底部显示迷你播控条：封面、歌名、上一首/播放/下一首、收藏、桌面歌词开关和展开主窗口，可拖动位置。</p>
+        <label>
+          <span>播控条样式</span>
+          <select aria-label="播控条样式" value={mini.embedInTaskbar ? 'taskbar' : 'float'} disabled={!mini.enabled}
+            onChange={event => void ctx.updateSettings({ miniPlayer: { ...mini, embedInTaskbar: event.target.value === 'taskbar' } })}>
+            <option value="taskbar">嵌入任务栏（贴底一条）</option>
+            <option value="float">悬浮胶囊（可拖到任意位置）</option>
+          </select>
+        </label>
+        <p className="hint">嵌入模式下播控条画在任务栏上，外观与任务栏融为一体，可沿任务栏左右拖动调整位置；悬浮模式则是一个可任意拖动的玻璃胶囊。</p>
         <label>
           <span>默认音质</span>
           <select aria-label="默认音质" value={settings?.quality ?? 'standard'} onChange={event => void ctx.updateSettings({ quality: event.target.value as AppSettings['quality'] })}>
@@ -528,13 +562,33 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
         <label>
           <span>桌面歌词</span>
           <input type="checkbox" aria-label="桌面歌词" checked={settings?.desktopLyrics?.enabled ?? true}
-            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...(settings?.desktopLyrics ?? { locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }), enabled: event.target.checked } })} />
+            onChange={event => void ctx.updateSettings({
+              desktopLyrics: {
+                ...(settings?.desktopLyrics ?? {
+                  locked: false, position: null, fontColor: '#ffffff',
+                  showBackground: false, backgroundOpacity: 0.55, fontSize: 34, width: 760,
+                }),
+                enabled: event.target.checked,
+              },
+            })} />
         </label>
-        <p className="hint">在屏幕上悬浮显示当前歌词行，置顶且不占任务栏。解锁时可以拖动位置、锁定（鼠标穿透）或关闭。</p>
+        <p className="hint">歌词以纯文字悬浮在桌面上（默认不带底板）。解锁后可直接拖动歌词，或点歌词右上角的 ⚙ 调整字号、宽度、颜色和背景；锁定后鼠标完全穿透，只剩文字。</p>
         {settings?.desktopLyrics?.enabled && <label>
           <span>锁定桌面歌词（鼠标穿透）</span>
           <input type="checkbox" aria-label="锁定桌面歌词" checked={settings.desktopLyrics.locked}
             onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics, locked: event.target.checked } })} />
+        </label>}
+        {settings?.desktopLyrics?.enabled && <label className="appearance-slider">
+          <span>歌词字号<small>{settings.desktopLyrics.fontSize ?? 34}px</small></span>
+          <input type="range" aria-label="歌词字号" min="16" max="96" step="1" value={settings.desktopLyrics.fontSize ?? 34}
+            style={{ '--pct': `${Math.round(((settings.desktopLyrics.fontSize ?? 34) - 16) / 80 * 100)}%` } as CSSProperties}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, fontSize: Number(event.target.value) } })} />
+        </label>}
+        {settings?.desktopLyrics?.enabled && <label className="appearance-slider">
+          <span>歌词宽度<small>{settings.desktopLyrics.width ?? 760}px</small></span>
+          <input type="range" aria-label="歌词宽度" min="280" max="2000" step="20" value={settings.desktopLyrics.width ?? 760}
+            style={{ '--pct': `${Math.round(((settings.desktopLyrics.width ?? 760) - 280) / 1720 * 100)}%` } as CSSProperties}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, width: Number(event.target.value) } })} />
         </label>}
         {settings?.desktopLyrics?.enabled && <div className="appearance-field">
           <div className="appearance-label">
@@ -554,13 +608,25 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
             </label>
           </div>
         </div>}
-        {settings?.desktopLyrics?.enabled && <label className="appearance-slider">
-          <span>歌词背景透明度<small>{Math.round((settings.desktopLyrics.backgroundOpacity ?? 0.55) * 100)}%</small></span>
+        {settings?.desktopLyrics?.enabled && <label>
+          <span>显示深色底板</span>
+          <input type="checkbox" aria-label="显示歌词底板" checked={settings.desktopLyrics.showBackground ?? false}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, showBackground: event.target.checked } })} />
+        </label>}
+        {settings?.desktopLyrics?.enabled && settings.desktopLyrics.showBackground && <label className="appearance-slider">
+          <span>底板不透明度<small>{Math.round((settings.desktopLyrics.backgroundOpacity ?? 0.55) * 100)}%</small></span>
           <input type="range" aria-label="歌词背景透明度" min="0" max="1" step="0.05" value={settings.desktopLyrics.backgroundOpacity ?? 0.55}
             style={{ '--pct': `${Math.round((settings.desktopLyrics.backgroundOpacity ?? 0.55) * 100)}%` } as CSSProperties}
             onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, backgroundOpacity: Number(event.target.value) } })} />
         </label>}
-        {settings?.desktopLyrics?.enabled && <p className="hint">歌词窗口以置顶悬浮方式显示，锁定后鼠标完全穿透；需要拖动、解锁或关闭时，先在这里取消锁定。</p>}
+        {settings?.desktopLyrics?.enabled && <div className="appearance-field">
+          <div className="appearance-label">
+            <span>歌词位置</span>
+            <span className="hint">拖动歌词或点击右侧按钮回到屏幕底部居中</span>
+          </div>
+          <button className="ghost" aria-label="重置歌词位置"
+            onClick={() => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, position: null } })}>重置位置</button>
+        </div>}
         <div className="cache-block">
           <div className="cache-text">
             <span>歌词缓存</span>
@@ -656,6 +722,57 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
           </div>}
         </div>
         <button className="ghost" onClick={() => updateAppearance({ accent: 'red', panelOpacity: 1, cornerRadius: 11, fontScale: 1, fontFamily: 'sans' })}>恢复默认外观</button>
+      </div>}
+
+      {tab === 'glass' && <div className="settings-form appearance-form">
+        <p className="hint">侧边栏、内容区、播放条与顶栏共用这套毛玻璃参数。拖动即时预览，设置会自动保存。</p>
+        {([
+          ['blur', '模糊', 0, 40, 1, 'px'],
+          ['opacity', '透明度', 0, 1, 0.01, '%'],
+          ['saturate', '饱和度', 0, 2, 0.01, '%'],
+          ['radius', '圆角', 0, 40, 1, 'px'],
+          ['borderWidth', '边框宽度', 0, 8, 0.5, 'px'],
+          ['borderOpacity', '边框透明度', 0, 1, 0.01, '%'],
+          ['shadowSize', '阴影', 0, 40, 0.5, 'px'],
+          ['shadowOpacity', '阴影透明度', 0, 1, 0.01, '%'],
+        ] as [keyof GlassSettings, string, number, number, number, string][]).map(([key, label, min, max, step, unit]) => {
+          const value = glassShown[key] as number;
+          const shownValue = unit === '%' ? `${Math.round(value * 100)}%` : `${value}${unit}`;
+          const pct = Math.round(((value - min) / (max - min)) * 100);
+          return <label className="appearance-slider" key={key}>
+            <span>{label}<small>{shownValue}</small></span>
+            <input type="range" aria-label={`毛玻璃${label}`} min={min} max={max} step={step} value={value}
+              style={{ '--pct': `${pct}%` } as CSSProperties}
+              onChange={event => updateGlass({ [key]: Number(event.target.value) })} />
+          </label>;
+        })}
+        <div className="appearance-field">
+          <div className="appearance-label"><span>背景色</span><span className="hint">与透明度混合的色调</span></div>
+          <label className="accent-swatch accent-swatch-custom" style={{ background: glassShown.backgroundColor, color: glassShown.backgroundColor }} title="毛玻璃背景色">
+            <input type="color" aria-label="毛玻璃背景色" value={glassShown.backgroundColor}
+              onChange={event => updateGlass({ backgroundColor: event.target.value })} />
+          </label>
+        </div>
+        <div className="appearance-field">
+          <div className="appearance-label"><span>边框色</span><span className="hint">细边框的颜色</span></div>
+          <label className="accent-swatch accent-swatch-custom" style={{ background: glassShown.borderColor, color: glassShown.borderColor }} title="毛玻璃边框色">
+            <input type="color" aria-label="毛玻璃边框色" value={glassShown.borderColor}
+              onChange={event => updateGlass({ borderColor: event.target.value })} />
+          </label>
+        </div>
+        <div className="appearance-field">
+          <div className="appearance-label"><span>底层背景图片</span><span className="hint">PNG / JPG / WebP / GIF，最大 3 MB</span></div>
+          <div className="cache-actions">
+            <button className="ghost" onClick={() => void pickBackground()}>上传背景图片</button>
+            <button className="ghost" onClick={() => { updateGlass({ backgroundImage: '' }); ctx.notice('已清除背景图片。'); }} disabled={!glassShown.backgroundImage}>清除背景</button>
+          </div>
+          {glassShown.backgroundImage && <div className="bg-preview" style={{ backgroundImage: `url("${glassShown.backgroundImage}")` }} aria-label="当前背景图片预览" />}
+        </div>
+        <button className="ghost" onClick={() => updateGlass({
+          blur: 0, opacity: 0.1, saturate: 0.51, backgroundColor: '#ffEBEB', radius: 20,
+          borderWidth: 0.5, borderColor: '#ffEBEB', borderOpacity: 0.3, shadowSize: 7,
+          shadowOpacity: 0.15, backgroundImage: '',
+        })}>恢复默认毛玻璃</button>
       </div>}
 
       {tab === 'about' && <div className="settings-form">

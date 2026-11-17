@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, sanitizeAppearance, sanitizeQueue, sanitizeSettings } from '../src/main/settings.mjs';
+import { DEFAULT_SETTINGS, sanitizeAppearance, sanitizeGlass, sanitizeQueue, sanitizeSettings } from '../src/main/settings.mjs';
 
 test('settings keep only known enum values and clamp volume', () => {
   assert.deepEqual(sanitizeSettings({ closeBehavior: 'tray', quality: 'lossless', volume: 5, repeatMode: 'one', shuffle: true, syncHistory: false }), {
     closeBehavior: 'tray', quality: 'lossless', volume: 1, repeatMode: 'one', shuffle: true, syncHistory: false,
     thirdPartyLyrics: true,
     appearance: DEFAULT_SETTINGS.appearance,
+    glass: DEFAULT_SETTINGS.glass,
     shortcuts: DEFAULT_SETTINGS.shortcuts,
     desktopLyrics: DEFAULT_SETTINGS.desktopLyrics,
     miniPlayer: DEFAULT_SETTINGS.miniPlayer,
@@ -110,4 +111,40 @@ test('a custom accent colour and font family are validated, not trusted', () => 
   assert.equal(/["'\\;{}<>]/.test(cleaned), false);
   assert.match(cleaned, /^Bad/);
   assert.equal(sanitizeAppearance({ fontFamily: 'custom', customFont: 'x'.repeat(200) }).customFont.length, 80);
+});
+
+test('glass settings clamp ranges and default from the schema', () => {
+  assert.deepEqual(sanitizeGlass(null), DEFAULT_SETTINGS.glass);
+  assert.deepEqual(sanitizeSettings({ volume: 0.5 }).glass, DEFAULT_SETTINGS.glass);
+  const clamped = sanitizeGlass({
+    blur: 999, opacity: -3, saturate: 9, backgroundColor: '#ABCDEF', radius: -5,
+    borderWidth: 100, borderColor: 'red', borderOpacity: 2, shadowSize: 500, shadowOpacity: -1,
+  });
+  assert.equal(clamped.blur, 40);
+  assert.equal(clamped.opacity, 0);
+  assert.equal(clamped.saturate, 2);
+  assert.equal(clamped.backgroundColor, '#abcdef');
+  assert.equal(clamped.radius, 0);
+  assert.equal(clamped.borderWidth, 8);
+  assert.equal(clamped.borderColor, DEFAULT_SETTINGS.glass.borderColor);
+  assert.equal(clamped.borderOpacity, 1);
+  assert.equal(clamped.shadowSize, 40);
+  assert.equal(clamped.shadowOpacity, 0);
+});
+
+test('glass background image accepts only small image data URLs', () => {
+  const good = 'data:image/png;base64,iVBORw0KGgoAAAA';
+  assert.equal(sanitizeGlass({ backgroundImage: good }).backgroundImage, good);
+  assert.equal(sanitizeGlass({ backgroundImage: 'data:image/svg+xml;base64,PHN2Zz4=' }).backgroundImage, '');
+  assert.equal(sanitizeGlass({ backgroundImage: 'javascript:alert(1)' }).backgroundImage, '');
+  assert.equal(sanitizeGlass({ backgroundImage: 'https://example.com/a.png' }).backgroundImage, '');
+  assert.equal(sanitizeGlass({ backgroundImage: 'data:image/png;base64,' + 'a'.repeat(5 * 1024 * 1024) }).backgroundImage, '');
+});
+
+test('a partial glass patch keeps unrelated settings and other glass fields', () => {
+  const base = sanitizeSettings({ quality: 'lossless' });
+  const next = sanitizeSettings({ glass: { blur: 12 } }, base);
+  assert.equal(next.quality, 'lossless');
+  assert.equal(next.glass.blur, 12);
+  assert.equal(next.glass.opacity, DEFAULT_SETTINGS.glass.opacity);
 });

@@ -115,16 +115,16 @@ try {
     requireType: typeof require,
   }));
   assert.equal(boundary.desktopApi, true);
-  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
+  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'onSettingsChanged', 'player', 'queue', 'settings', 'window']);
   assert.deepEqual(boundary.authKeys, ['cancelLogin', 'login', 'logout', 'onProgress', 'status']);
   assert.deepEqual(boundary.musicKeys, [
     'album', 'artist', 'createPlaylist', 'deletePlaylist', 'favoriteState', 'favorites', 'favoritesSummary', 'history', 'lyrics',
     'playlistDetail', 'playlists', 'reportPlayback', 'resolvePlayback', 'search', 'setFavorite', 'updatePlaylistDescription',
   ]);
-  assert.deepEqual(boundary.settingsKeys, ['get', 'update']);
+  assert.deepEqual(boundary.settingsKeys, ['get', 'pickBackgroundImage', 'update']);
   assert.deepEqual(boundary.queueKeys, ['load', 'save']);
   assert.deepEqual(boundary.miniPlayerKeys, ['update']);
-  assert.deepEqual(boundary.windowKeys, ['hideToTray', 'minimize', 'setCloseBehavior']);
+  assert.deepEqual(boundary.windowKeys, ['close', 'hideToTray', 'minimize', 'setCloseBehavior', 'toggleMaximize']);
   assert.deepEqual(boundary.playerKeys, ['onCommand']);
   assert.equal(boundary.hasGenericInvoke, false, 'preload exposed a generic IPC entry point');
   assert.equal(boundary.nodeProcess, 'undefined');

@@ -19,6 +19,19 @@ export const DEFAULT_SETTINGS = Object.freeze({
     customAccent: '#c8202e',
     customFont: '',
   }),
+  glass: Object.freeze({
+    blur: 0,
+    opacity: 0.1,
+    saturate: 0.51,
+    backgroundColor: '#ffEBEB',
+    radius: 20,
+    borderWidth: 0.5,
+    borderColor: '#ffEBEB',
+    borderOpacity: 0.3,
+    shadowSize: 7,
+    shadowOpacity: 0.15,
+    backgroundImage: '',
+  }),
   shortcuts: Object.freeze({
     'play-pause': 'Control+Alt+P',
     next: 'Control+Alt+Right',
@@ -28,8 +41,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
     mute: 'Control+Alt+M',
     like: 'Control+Alt+L',
   }),
-  desktopLyrics: Object.freeze({ enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }),
-  miniPlayer: Object.freeze({ enabled: true, position: null }),
+  // Bare text by default: the old always-on dark plate read as a black box over the desktop.
+  desktopLyrics: Object.freeze({
+    enabled: true, locked: false, position: null,
+    fontColor: '#ffffff', showBackground: false, backgroundOpacity: 0.55,
+    fontSize: 34, width: 760,
+  }),
+  miniPlayer: Object.freeze({ enabled: true, position: null, embedInTaskbar: true, taskbarX: null }),
 });
 
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
@@ -41,6 +59,14 @@ const REPEAT_MODES = new Set(['off', 'all', 'one']);
 const ACCENTS = new Set(['red', 'blue', 'green', 'amber', 'violet', 'custom']);
 const FONT_CHOICES = new Set(['sans', 'serif', 'mono', 'custom']);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+// A background image is stored inline in settings.json. Only small, fixed-format image data URLs
+// are accepted so a tampered settings file can never inject script or bloat the store.
+const IMAGE_DATA_URL = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
+const MAX_IMAGE_DATA_URL = 4 * 1024 * 1024; // ~3 MB decoded image
+
+function isSafeImageDataUrl(value) {
+  return typeof value === 'string' && value.length <= MAX_IMAGE_DATA_URL && IMAGE_DATA_URL.test(value);
+}
 
 function clampNumber(value, min, max, fallback) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
@@ -63,6 +89,28 @@ export function sanitizeAppearance(input, fallback = DEFAULT_SETTINGS.appearance
     customFont: typeof raw.customFont === 'string'
       ? raw.customFont.replace(/["'\\;{}<>]/g, '').trim().slice(0, 80)
       : base.customFont,
+  };
+}
+
+/** @returns {import('../shared/types').GlassSettings} */
+export function sanitizeGlass(input, fallback = DEFAULT_SETTINGS.glass) {
+  const base = { ...DEFAULT_SETTINGS.glass, ...(fallback ?? {}) };
+  if (!input || typeof input !== 'object') return base;
+  const raw = /** @type {Record<string, unknown>} */ (input);
+  return {
+    blur: clampNumber(raw.blur, 0, 40, base.blur),
+    opacity: clampNumber(raw.opacity, 0, 1, base.opacity),
+    saturate: clampNumber(raw.saturate, 0, 2, base.saturate),
+    backgroundColor: typeof raw.backgroundColor === 'string' && HEX_COLOR.test(raw.backgroundColor)
+      ? raw.backgroundColor.toLowerCase() : base.backgroundColor,
+    radius: clampNumber(raw.radius, 0, 40, base.radius),
+    borderWidth: clampNumber(raw.borderWidth, 0, 8, base.borderWidth),
+    borderColor: typeof raw.borderColor === 'string' && HEX_COLOR.test(raw.borderColor)
+      ? raw.borderColor.toLowerCase() : base.borderColor,
+    borderOpacity: clampNumber(raw.borderOpacity, 0, 1, base.borderOpacity),
+    shadowSize: clampNumber(raw.shadowSize, 0, 40, base.shadowSize),
+    shadowOpacity: clampNumber(raw.shadowOpacity, 0, 1, base.shadowOpacity),
+    backgroundImage: isSafeImageDataUrl(raw.backgroundImage) ? raw.backgroundImage : '',
   };
 }
 
@@ -89,6 +137,9 @@ export function sanitizeSettings(input, fallback = DEFAULT_SETTINGS) {
   if (raw.appearance && typeof raw.appearance === 'object') {
     next.appearance = sanitizeAppearance(raw.appearance, base.appearance);
   }
+  if (raw.glass !== undefined) {
+    next.glass = sanitizeGlass(raw.glass, base.glass);
+  }
   if (raw.shortcuts !== undefined) {
     next.shortcuts = sanitizeShortcuts(raw.shortcuts, base.shortcuts);
   }
@@ -107,15 +158,24 @@ export function sanitizeDesktopLyrics(input, fallback = DEFAULT_SETTINGS.desktop
   const base = { ...DEFAULT_SETTINGS.desktopLyrics, ...(fallback ?? {}) };
   if (!input || typeof input !== 'object') return base;
   const raw = /** @type {Record<string, unknown>} */ (input);
-  const position = raw.position && typeof raw.position === 'object' && Number.isInteger(raw.position.x)
-    && Number.isInteger(raw.position.y) && Math.abs(raw.position.x) <= 32768 && Math.abs(raw.position.y) <= 32768
-    ? { x: raw.position.x, y: raw.position.y } : null;
+  // An omitted position must keep the stored one: style patches from the overlay carry only the
+  // look-and-feel keys, and treating that as "no position" would drop the lyrics back to the
+  // default spot on every slider drag. An explicit null still means "reset".
+  const position = raw.position === undefined ? base.position
+    : raw.position && typeof raw.position === 'object' && Number.isInteger(raw.position.x)
+      && Number.isInteger(raw.position.y) && Math.abs(raw.position.x) <= 32768 && Math.abs(raw.position.y) <= 32768
+      ? { x: raw.position.x, y: raw.position.y } : null;
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : base.enabled,
     locked: typeof raw.locked === 'boolean' ? raw.locked : base.locked,
     position,
     fontColor: typeof raw.fontColor === 'string' && HEX_COLOR.test(raw.fontColor) ? raw.fontColor.toLowerCase() : base.fontColor,
+    showBackground: typeof raw.showBackground === 'boolean' ? raw.showBackground : base.showBackground,
     backgroundOpacity: clampNumber(raw.backgroundOpacity, 0, 1, base.backgroundOpacity),
+    // The window is sized from these two, so they are clamped to a range that stays readable on a
+    // 1366-wide screen and never taller than a typical work area.
+    fontSize: Math.round(clampNumber(raw.fontSize, 16, 96, base.fontSize)),
+    width: Math.round(clampNumber(raw.width, 280, 2400, base.width)),
   };
 }
 
@@ -127,9 +187,14 @@ export function sanitizeMiniPlayer(input, fallback = DEFAULT_SETTINGS.miniPlayer
   const position = raw.position && typeof raw.position === 'object' && Number.isInteger(raw.position.x)
     && Number.isInteger(raw.position.y) && Math.abs(raw.position.x) <= 32768 && Math.abs(raw.position.y) <= 32768
     ? { x: raw.position.x, y: raw.position.y } : null;
+  // The taskbar anchor is a single coordinate along the bar; anything outside a plausible
+  // multi-monitor span is dropped so a stale value can never park the strip off-screen.
+  const taskbarX = Number.isInteger(raw.taskbarX) && Math.abs(raw.taskbarX) <= 32768 ? raw.taskbarX : null;
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : base.enabled,
     position,
+    embedInTaskbar: typeof raw.embedInTaskbar === 'boolean' ? raw.embedInTaskbar : base.embedInTaskbar,
+    taskbarX,
   };
 }
 
