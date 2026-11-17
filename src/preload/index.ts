@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels } from '../shared/channels';
-import type { DesktopApi, DesktopLyricsUpdate, PlayerCommand } from '../shared/types';
+import type { DesktopApi, DesktopLyricsUpdate, MiniPlayerState, PlayerCommand } from '../shared/types';
 
 const api: DesktopApi = {
   auth: {
@@ -51,6 +51,7 @@ const api: DesktopApi = {
   },
   window: {
     minimize: () => ipcRenderer.invoke(channels.windowMinimize),
+    hideToTray: () => ipcRenderer.invoke(channels.windowHideToTray),
     setCloseBehavior: input => ipcRenderer.invoke(channels.windowSetCloseBehavior, input),
   },
   app: { quit: () => ipcRenderer.invoke(channels.appQuit) },
@@ -63,6 +64,9 @@ const api: DesktopApi = {
   },
   desktopLyrics: {
     update: (input: DesktopLyricsUpdate) => { ipcRenderer.send(channels.desktopLyricsUpdate, input); },
+  },
+  miniPlayer: {
+    update: (input: MiniPlayerState) => { ipcRenderer.send(channels.miniPlayerUpdate, input); },
   },
   onNotice: listener => {
     const wrapped = (_event: Electron.IpcRendererEvent, message: string) => listener(message);

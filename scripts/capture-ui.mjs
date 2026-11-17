@@ -226,7 +226,7 @@ try {
   await page.getByRole('button', { name: '暂停' }).waitFor({ timeout: 15000 });
   await page.waitForTimeout(2400);
   await shot('14-now-playing.png');
-  await page.getByRole('button', { name: '歌词' }).click();
+  await page.getByRole('button', { name: '歌词', exact: true }).click();
   await page.getByText('我在副歌里等你回头').waitFor({ timeout: 5000 });
   await shot('15-lyrics-panel.png');
   await page.getByRole('button', { name: '沉浸歌词' }).click();

@@ -107,6 +107,7 @@ try {
     musicKeys: Object.keys(window.desktop?.music ?? {}).sort(),
     settingsKeys: Object.keys(window.desktop?.settings ?? {}).sort(),
     queueKeys: Object.keys(window.desktop?.queue ?? {}).sort(),
+    miniPlayerKeys: Object.keys(window.desktop?.miniPlayer ?? {}).sort(),
     windowKeys: Object.keys(window.desktop?.window ?? {}).sort(),
     playerKeys: Object.keys(window.desktop?.player ?? {}).sort(),
     hasGenericInvoke: 'invoke' in (window.desktop ?? {}) || 'send' in (window.desktop ?? {}),
@@ -114,7 +115,7 @@ try {
     requireType: typeof require,
   }));
   assert.equal(boundary.desktopApi, true);
-  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
+  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
   assert.deepEqual(boundary.authKeys, ['cancelLogin', 'login', 'logout', 'onProgress', 'status']);
   assert.deepEqual(boundary.musicKeys, [
     'album', 'artist', 'createPlaylist', 'deletePlaylist', 'favoriteState', 'favorites', 'favoritesSummary', 'history', 'lyrics',
@@ -122,7 +123,8 @@ try {
   ]);
   assert.deepEqual(boundary.settingsKeys, ['get', 'update']);
   assert.deepEqual(boundary.queueKeys, ['load', 'save']);
-  assert.deepEqual(boundary.windowKeys, ['minimize', 'setCloseBehavior']);
+  assert.deepEqual(boundary.miniPlayerKeys, ['update']);
+  assert.deepEqual(boundary.windowKeys, ['hideToTray', 'minimize', 'setCloseBehavior']);
   assert.deepEqual(boundary.playerKeys, ['onCommand']);
   assert.equal(boundary.hasGenericInvoke, false, 'preload exposed a generic IPC entry point');
   assert.equal(boundary.nodeProcess, 'undefined');

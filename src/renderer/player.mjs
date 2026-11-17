@@ -113,3 +113,33 @@ export function planPlayNext(queue, order, cursor, track) {
   const nextCursor = activeIndex < 0 ? -1 : nextOrder.indexOf(activeRemapped);
   return { queue: nextQueue, order: nextOrder, cursor: nextCursor, outcome: 'moved' };
 }
+
+// Remove one row from the queue while keeping `order` a permutation and the cursor on the
+// still-playing track. Removing the active row advances to whatever follows it in play order;
+// removing any other row keeps the current song untouched. `remapCursor` also rewrites the
+// previous-track history, which stores order positions rather than track IDs.
+export function planRemoveFromQueue(queue, order, cursor, trackId) {
+  if (!Array.isArray(queue) || !Array.isArray(order) || typeof trackId !== 'string') return null;
+  const target = queue.findIndex(item => item?.id === trackId);
+  if (target < 0) return null;
+  const activeIndex = Number.isInteger(cursor) && cursor >= 0 && cursor < order.length ? order[cursor] : -1;
+  const removedCursor = order.indexOf(target);
+  const nextQueue = queue.filter((_item, index) => index !== target);
+  const remapIndex = index => (index < 0 || index === target ? -1 : index < target ? index : index - 1);
+  const nextOrder = order.map(remapIndex).filter(index => index >= 0);
+  let nextCursor = cursor;
+  if (activeIndex === target) nextCursor = nextOrder.length ? Math.min(Math.max(0, cursor), nextOrder.length - 1) : -1;
+  else if (removedCursor >= 0 && removedCursor < cursor) nextCursor = cursor - 1;
+  return {
+    queue: nextQueue,
+    order: nextOrder,
+    cursor: nextCursor,
+    removedCursor,
+    activeRemoved: activeIndex === target,
+    remapCursor(oldCursor) {
+      if (!Number.isInteger(oldCursor) || oldCursor < 0) return -1;
+      if (oldCursor === removedCursor) return -1;
+      return oldCursor < removedCursor ? oldCursor : oldCursor - 1;
+    },
+  };
+}

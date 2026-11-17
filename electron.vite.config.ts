@@ -10,7 +10,11 @@ export default defineConfig({
     build: {
       outDir: 'out/preload',
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/preload/index.ts'), lyrics: resolve(__dirname, 'src/preload/lyrics.ts') },
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          lyrics: resolve(__dirname, 'src/preload/lyrics.ts'),
+          mini: resolve(__dirname, 'src/preload/mini.ts'),
+        },
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
@@ -22,7 +26,11 @@ export default defineConfig({
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/renderer/index.html'), lyrics: resolve(__dirname, 'src/renderer/lyrics.html') },
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          lyrics: resolve(__dirname, 'src/renderer/lyrics.html'),
+          mini: resolve(__dirname, 'src/renderer/mini.html'),
+        },
       },
     },
   },

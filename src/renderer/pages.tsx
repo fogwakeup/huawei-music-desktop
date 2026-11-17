@@ -16,6 +16,9 @@ export type LibraryContext = TrackActions & {
   notice(text: string): void;
   run<T>(action: () => Promise<Result<T>>, failure: string): Promise<T | undefined>;
   setFavoriteState(trackId: string, favorite: boolean): void;
+  isInQueue(trackId: string): boolean;
+  removeFromQueue(track: Track): void;
+  removeFromLocalHistory(track: Track): void;
   openPlaylist(playlist: Playlist): void;
   closePlaylist(): void;
   setCloseBehavior(value: AppSettings['closeBehavior']): void;
@@ -382,7 +385,8 @@ export function HistoryPage({ ctx }: { ctx: LibraryContext }) {
       <span className="hint">{tab === 'local' ? '仅记录本机播放，不会同步回华为。' : '来自华为账号的服务端最近播放。'}</span>
     </div>
     {tab === 'local'
-      ? <TrackTable tracks={ctx.localHistory} actions={ctx} emptyText="本机还没有播放记录。" />
+      ? <TrackTable tracks={ctx.localHistory} actions={ctx} onRemoveFromList={track => ctx.removeFromLocalHistory(track)}
+        listRemoveLabel="从本机历史移除" emptyText="本机还没有播放记录。" />
       : <TrackTable tracks={remote} actions={ctx} emptyText="华为历史读取中或为空。" />}
   </section>;
 }
@@ -447,7 +451,7 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
     const next: ShortcutsSettings = { ...current, [action]: value };
     if (value) {
       // One accelerator drives one action: stealing it from another action disables that one.
-      for (const other of SHORTCUT_ACTIONS) {
+      for (const other of SHORTCUT_ACTIONS as ShortcutAction[]) {
         if (other !== action && next[other] === value) {
           next[other] = '';
           ctx.notice(`该组合键已从「${SHORTCUT_ACTION_LABELS[other]}」移除。`);
@@ -480,6 +484,13 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
             <option value="tray">最小化到托盘</option>
           </select>
         </label>
+        <p className="hint">默认最小化到任务栏托盘，播放不中断；点击托盘图标即可恢复窗口。需要真正退出时选择「退出程序」。</p>
+        <label>
+          <span>桌面状态栏播控</span>
+          <input type="checkbox" aria-label="桌面状态栏播控" checked={settings?.miniPlayer?.enabled ?? true}
+            onChange={event => void ctx.updateSettings({ miniPlayer: { ...(settings?.miniPlayer ?? { enabled: true, position: null }), enabled: event.target.checked } })} />
+        </label>
+        <p className="hint">在桌面底部显示迷你播控条：封面、歌名、上一首/播放/下一首、收藏、桌面歌词开关和展开主窗口，可拖动位置。</p>
         <label>
           <span>默认音质</span>
           <select aria-label="默认音质" value={settings?.quality ?? 'standard'} onChange={event => void ctx.updateSettings({ quality: event.target.value as AppSettings['quality'] })}>
@@ -516,7 +527,7 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
         <p className="hint">华为接口没有返回歌词时，用「歌名 + 艺人 + 时长」在酷狗音乐和 LRCLIB 严格匹配；匹配不准则保持无歌词，不会显示别的歌。只请求歌词文本，不涉及音源，也不会上传账号信息。</p>
         <label>
           <span>桌面歌词</span>
-          <input type="checkbox" aria-label="桌面歌词" checked={settings?.desktopLyrics?.enabled ?? false}
+          <input type="checkbox" aria-label="桌面歌词" checked={settings?.desktopLyrics?.enabled ?? true}
             onChange={event => void ctx.updateSettings({ desktopLyrics: { ...(settings?.desktopLyrics ?? { locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }), enabled: event.target.checked } })} />
         </label>
         <p className="hint">在屏幕上悬浮显示当前歌词行，置顶且不占任务栏。解锁时可以拖动位置、锁定（鼠标穿透）或关闭。</p>
@@ -569,7 +580,7 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
 
       {tab === 'shortcuts' && <div className="settings-form">
         <p className="hint">全局快捷键在应用未聚焦时也能控制播放，默认键位参考常见音乐播放器的 Ctrl+Alt+ 组合。键盘上的媒体键（播放/暂停、前进、后退）始终有效，不受此处影响；点击键位重新录制，Backspace 清除后表示禁用。</p>
-        {SHORTCUT_ACTIONS.map(action => <div key={action} className="shortcut-row">
+        {(SHORTCUT_ACTIONS as ShortcutAction[]).map(action => <div key={action} className="shortcut-row">
           <span className="shortcut-label">{SHORTCUT_ACTION_LABELS[action]}</span>
           <KeyCapture
             accelerator={settings?.shortcuts?.[action] ?? DEFAULT_SHORTCUTS[action]}

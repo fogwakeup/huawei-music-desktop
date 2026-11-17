@@ -41,6 +41,34 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   await saveJson(app.getPath('userData'), 'settings', sanitizeSettings(settings), fs);
 }
 
+// One-time upgrade for profiles created by older builds whose close button really quit the app.
+// A user who later picks "退出程序" is never migrated again.
+const TRAY_CLOSE_MIGRATION = 'tray-close-default-v1';
+const DESKTOP_LYRICS_MIGRATION = 'desktop-lyrics-on-v1';
+export async function migrateCloseBehaviorToTray(): Promise<AppSettings> {
+  const settings = await loadSettings();
+  if (settings.closeBehavior !== 'quit') return settings;
+  const userData = app.getPath('userData');
+  const migrated = await loadJson(userData, TRAY_CLOSE_MIGRATION, null, fs) as { v?: number } | null;
+  if (migrated?.v === 1) return settings;
+  const next = await updateSettings({ closeBehavior: 'tray' });
+  await saveJson(userData, TRAY_CLOSE_MIGRATION, { v: 1 }, fs);
+  return next;
+}
+
+// Older releases shipped desktop lyrics with a hidden, default-off switch. Turn it on once for
+// profiles upgrading to this build; a user who later disables it is never migrated again.
+export async function migrateDesktopLyricsOn(): Promise<AppSettings> {
+  const settings = await loadSettings();
+  if (settings.desktopLyrics.enabled) return settings;
+  const userData = app.getPath('userData');
+  const migrated = await loadJson(userData, DESKTOP_LYRICS_MIGRATION, null, fs) as { v?: number } | null;
+  if (migrated?.v === 1) return settings;
+  const next = await updateSettings({ desktopLyrics: { ...settings.desktopLyrics, enabled: true } });
+  await saveJson(userData, DESKTOP_LYRICS_MIGRATION, { v: 1 }, fs);
+  return next;
+}
+
 let settingsWrite: Promise<unknown> = Promise.resolve();
 export function updateSettings(patch: unknown): Promise<AppSettings> {
   const update = settingsWrite.catch(() => undefined).then(async () => {

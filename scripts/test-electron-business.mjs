@@ -83,7 +83,14 @@ try {
   });
   await page.getByRole('button', { name: '扫码登录' }).click();
   let login;
-  for (let i = 0; i < 100 && !login; i++) { login = app.windows().find(item => item !== page); if (!login) await page.waitForTimeout(50); }
+  // Mini bar / lyrics helper windows are file://; the temporary official login page is http(s).
+  for (let i = 0; i < 100 && !login; i++) {
+    login = app.windows().find(item => {
+      if (item === page) return false;
+      try { return ['http:', 'https:'].includes(new URL(item.url()).protocol); } catch { return false; }
+    });
+    if (!login) await page.waitForTimeout(50);
+  }
   await login.getByRole('button', { name: 'Authorize synthetic fixture' }).click({ noWaitAfter: true });
   await page.getByRole('button', { name: '退出', exact: true }).waitFor({ timeout: 10000 });
   const results = await page.evaluate(async () => {

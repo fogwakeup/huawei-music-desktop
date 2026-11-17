@@ -1,5 +1,6 @@
 // Pure shortcut logic shared by settings sanitation and the settings UI.
 // An accelerator is an Electron combo string like 'Control+Alt+Left'; '' disables the binding.
+/** @type {import('./types').ShortcutAction[]} */
 export const SHORTCUT_ACTIONS = ['play-pause', 'next', 'previous', 'volume-up', 'volume-down', 'mute', 'like'];
 
 export const SHORTCUT_ACTION_LABELS = {

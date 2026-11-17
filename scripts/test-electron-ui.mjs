@@ -129,7 +129,7 @@ try {
     nodeProcess: typeof process,
     genericInvoke: typeof window.desktop?.invoke,
   }));
-  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
+  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'miniPlayer', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
   assert.deepEqual(boundary.musicKeys, ['album', 'artist', 'createPlaylist', 'deletePlaylist', 'favoriteState', 'favorites', 'favoritesSummary', 'history', 'lyrics',
     'playlistDetail', 'playlists', 'reportPlayback', 'resolvePlayback', 'search', 'setFavorite', 'updatePlaylistDescription']);
   assert.equal(boundary.nodeProcess, 'undefined');
@@ -218,7 +218,7 @@ try {
   assert.deepEqual(writes, [{ trackId: 'smoke-mp3', favorite: false }]);
 
   // Lyrics / queue panels are mutually exclusive overlays.
-  await page.getByRole('button', { name: '歌词' }).click();
+  await page.getByRole('button', { name: '歌词', exact: true }).click();
   await page.getByText('第一句歌词').waitFor({ timeout: 5000 });
 
   // Local LRC import: the file dialog is stubbed, everything else runs for real (disk + IPC + parse).

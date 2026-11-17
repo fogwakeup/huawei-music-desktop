@@ -5,9 +5,10 @@ import { registerIpc } from './ipc';
 import { AuthManager } from './auth-manager';
 import { createAuthManagerLifecycle } from './auth-manager-lifecycle.mjs';
 import { createDesktopLyricsModule } from './desktop-lyrics';
+import { createMiniPlayerModule } from './mini-player';
 import { applyNodeProxy, electronBypassRules, proxyConfigurationProblem, proxyRules, readProxySettings } from './proxy.mjs';
 import { shouldBlockMediaRequest } from '../safe-media-url.mjs';
-import { loadSettings } from './storage';
+import { migrateCloseBehaviorToTray, migrateDesktopLyricsOn } from './storage';
 import { TRAY_ICON_PNG_BASE64 } from './icons';
 import { DEFAULT_SHORTCUTS, shortcutCommands } from '../shared/shortcuts.mjs';
 import { APP_DISPLAY_NAME } from '../shared/app-name.mjs';
@@ -19,6 +20,10 @@ let quitting = false;
 let closeBehavior: AppSettings['closeBehavior'] = 'quit';
 const rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 const desktopLyrics = createDesktopLyricsModule();
+const miniPlayer = createMiniPlayerModule({
+  onCommand: command => sendPlayerCommand(command),
+  onShowMain: () => showMainWindow(),
+});
 const authManagerLifecycle = createAuthManagerLifecycle(async () => {
   const auth = new AuthManager(message => mainWindow?.webContents.send('auth:progress', message),
     () => session.defaultSession.clearStorageData({ storages: ['localstorage', 'indexdb', 'cachestorage'] }),
@@ -37,11 +42,18 @@ async function createWindow(): Promise<void> {
     title: APP_DISPLAY_NAME,
     // No in-window menu bar on Windows/Linux; the menu is removed below.
     autoHideMenuBar: true,
+    // Windows 11 glass: a system-drawn mica backdrop blended behind the translucent app shell.
+    // The renderer keeps a translucent body so the material shows through. Setting the material
+    // up front avoids a first-frame flash of an opaque window. Older Windows simply ignore it.
+    backgroundMaterial: 'mica',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
     },
   });
+  // Re-assert after ready (some Windows builds only apply it once the window is mapped) and
+  // fall back to 'none' on systems without DWM material support.
+  try { window.setBackgroundMaterial('mica'); } catch { /* Unsupported Windows: keep default. */ }
   mainWindow = window;
   window.once('closed', () => { if (mainWindow === window) mainWindow = null; });
   // Default is a real quit; hiding to the tray only happens when the user opts in.
@@ -57,7 +69,10 @@ async function createWindow(): Promise<void> {
       onCloseBehavior: value => { closeBehavior = value; },
       onShortcuts: settings => applyGlobalShortcuts(settings),
       onDesktopLyrics: settings => desktopLyrics.applySettings(settings),
+      onMiniPlayer: settings => miniPlayer.applySettings(settings),
+      onHideToTray: () => { if (tray) window.hide(); else window.minimize(); },
       desktopLyrics,
+      miniPlayer,
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -167,11 +182,15 @@ app.whenReady().then(() => {
   }
   const proxy = readProxySettings();
   applyNodeProxy(proxy);
-  const settingsReady = loadSettings().then(settings => {
-    closeBehavior = settings.closeBehavior;
-    applyGlobalShortcuts(settings);
-    desktopLyrics.applySettings(settings);
-  });
+  const settingsReady = migrateCloseBehaviorToTray()
+    .then(() => migrateDesktopLyricsOn())
+    .then(settings => {
+      closeBehavior = settings.closeBehavior;
+      applyGlobalShortcuts(settings);
+      // Helper windows are created only after the main window exists, so the first BrowserWindow
+      // remains the one Playwright/tray/second-instance code treats as the application window.
+      return settings;
+    });
   configureApplicationMenu();
   createTray();
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
@@ -181,9 +200,14 @@ app.whenReady().then(() => {
   void Promise.all([settingsReady,
     rules ? session.defaultSession.setProxy({ mode: 'fixed_servers', proxyRules: rules, proxyBypassRules: electronBypassRules(proxy.bypass) }) : Promise.resolve(),
   ])
-    .then(() => createWindow().catch(() => {
-      failStartup('应用启动失败', '无法初始化应用窗口。请检查本机应用数据目录权限后重启。');
-    }))
+    .then(([settings]) => {
+      createWindow().then(() => {
+        desktopLyrics.applySettings(settings);
+        miniPlayer.applySettings(settings);
+      }).catch(() => {
+        failStartup('应用启动失败', '无法初始化应用窗口。请检查本机应用数据目录权限后重启。');
+      });
+    })
     .catch(() => failStartup('代理配置失败', '无法应用当前 HTTP(S) 代理配置。为避免绕过代理，本次不会直连网络。请检查代理设置后重启。'));
   app.on('activate', () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -198,6 +222,7 @@ app.on('before-quit', () => { quitting = true; });
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   desktopLyrics.destroy();
+  miniPlayer.destroy();
   tray?.destroy();
   tray = null;
 });

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Ban, ChevronUp, Heart, Headphones, ListMusic, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, X,
+  Ban, ChevronUp, Heart, Headphones, ListMinus, ListMusic, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Trash2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { activeLyricIndex } from '../lyrics.mjs';
 import { QUALITY_LABELS, QUALITY_ORDER } from '../shared/qualities.mjs';
@@ -20,6 +21,8 @@ export type TrackActions = {
   toggleFavorite(track: Track, favorite: boolean): void;
   openAlbum(id: string): void;
   openArtist(id: string): void;
+  isInQueue?(trackId: string): boolean;
+  removeFromQueue?(track: Track): void;
 };
 
 type TrackTableProps = {
@@ -30,6 +33,17 @@ type TrackTableProps = {
   busy?: boolean;
   loadMoreLabel?: string;
   emptyText?: string;
+  /** Optional page-specific delete action, e.g. "从本机历史移除". */
+  onRemoveFromList?: (track: Track) => void;
+  listRemoveLabel?: string;
+};
+
+type ContextMenuItem = {
+  label: string;
+  icon: ReactNode;
+  onSelect(): void;
+  disabled?: boolean;
+  danger?: boolean;
 };
 
 // Covers come from several CDN hosts (some legacy ones are plain http and get blocked by CSP).
@@ -47,8 +61,79 @@ function TrackArt({ track, size = 20 }: { track: Track; size?: number }) {
   </span>;
 }
 
-export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMoreLabel = '加载更多', emptyText }: TrackTableProps) {
+export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMoreLabel = '加载更多', emptyText, onRemoveFromList, listRemoveLabel }: TrackTableProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
+
+  // Close on any outside click / Escape / layout change. A second right-click is handled by
+  // the row itself (it replaces the menu), so no window-level contextmenu listener here.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    const scrollRoot = document.querySelector('.main-content');
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('blur', close);
+    scrollRoot?.addEventListener('scroll', close, { passive: true });
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('blur', close);
+      scrollRoot?.removeEventListener('scroll', close);
+    };
+  }, [menu]);
+
+  function openMenu(event: ReactMouseEvent, track: Track, index: number, favorite: boolean | undefined, key: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelected(key);
+    const unavailable = !track.available;
+    const items: ContextMenuItem[] = [
+      { label: '播放', icon: <Play size={13} fill="currentColor" />, disabled: unavailable, onSelect: () => actions.play(tracks, index) },
+      { label: '下一首播放', icon: <SkipForward size={13} fill="currentColor" />, disabled: unavailable, onSelect: () => actions.playNext(track) },
+      {
+        label: favorite ? '取消收藏' : '收藏',
+        icon: <Heart size={13} fill={favorite ? 'currentColor' : 'none'} />,
+        onSelect: () => { actions.toggleFavorite(track, !favorite); },
+      },
+    ];
+    if (actions.removeFromQueue) items.push({
+      label: '从播放队列移除',
+      icon: <ListMinus size={13} />,
+      disabled: actions.isInQueue ? !actions.isInQueue(track.id) : false,
+      onSelect: () => { actions.removeFromQueue?.(track); },
+    });
+    if (onRemoveFromList && listRemoveLabel) items.push({
+      label: listRemoveLabel,
+      icon: <Trash2 size={13} />,
+      danger: true,
+      onSelect: () => { onRemoveFromList(track); },
+    });
+    const menuWidth = 208;
+    const menuHeight = items.length * 34 + 12;
+    setMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      items,
+    });
+  }
+
+  const menuNode = menu
+    ? createPortal(
+      <div className="track-context-menu" role="menu" aria-label="歌曲操作" style={{ left: menu.x, top: menu.y }}
+        onClick={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}>
+        {menu.items.map(item => <button key={item.label} role="menuitem" className={item.danger ? 'danger' : ''}
+          disabled={item.disabled} onClick={() => { item.onSelect(); setMenu(null); }}>
+          {item.icon}<span>{item.label}</span>
+        </button>)}
+      </div>,
+      document.body,
+    )
+    : null;
+
   if (!tracks.length) return <div className="list-empty"><p>{emptyText ?? '这里还没有内容。'}</p></div>;
   return <>
     <div className="track-list">
@@ -64,6 +149,7 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
           tabIndex={0}
           aria-label={`${track.title}，${track.artists.map(artist => artist.name).join('、') || '未知艺人'}${unavailable ? '，无版权' : ''}`}
           onClick={() => setSelected(key)}
+          onContextMenu={event => openMenu(event, track, index, favorite, key)}
           onDoubleClick={() => { if (!unavailable) actions.play(tracks, index); }}
           onKeyDown={event => {
             if (event.target === event.currentTarget && !unavailable && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); actions.play(tracks, index); }
@@ -119,6 +205,7 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
       })}
     </div>
     {hasMore && onLoadMore && <button className="ghost load-more" onClick={onLoadMore} disabled={busy}>{busy ? '正在读取…' : loadMoreLabel}</button>}
+    {menuNode}
   </>;
 }
 
@@ -160,9 +247,13 @@ type PlayerBarProps = {
   onToggleRepeat(): void;
   onToggleShuffle(): void;
   onToggleLyrics(): void;
+  onToggleDesktopLyrics(): void;
+  onToggleMiniPlayer(): void;
   onToggleQueue(): void;
   onOpenStage(): void;
   lyricsOpen: boolean;
+  desktopLyricsEnabled: boolean;
+  miniPlayerEnabled: boolean;
   queueOpen: boolean;
   queueCount: number;
   favorite: boolean | undefined;
@@ -250,6 +341,14 @@ export function PlayerBar(props: PlayerBarProps) {
       </div>
       <button className="pill-button" aria-label="歌词" aria-pressed={props.lyricsOpen} onClick={props.onToggleLyrics} disabled={!track}>
         <ChevronUp size={13} />词
+      </button>
+      <button className="pill-button" aria-label="桌面歌词" aria-pressed={props.desktopLyricsEnabled} onClick={props.onToggleDesktopLyrics}
+        title="显示 / 隐藏桌面悬浮歌词">
+        桌面词
+      </button>
+      <button className="pill-button" aria-label="桌面播控条" aria-pressed={props.miniPlayerEnabled} onClick={props.onToggleMiniPlayer}
+        title="显示 / 隐藏桌面状态栏播控条">
+        <Music2 size={13} />状态栏
       </button>
       <button className="pill-button" aria-label="播放队列" aria-pressed={props.queueOpen} onClick={props.onToggleQueue} disabled={!props.queueCount}>
         队列 {props.queueCount}

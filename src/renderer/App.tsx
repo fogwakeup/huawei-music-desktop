@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Heart, Headphones, History, ListMusic, LogIn, LogOut, Search, Settings as SettingsIcon,
+  Heart, Headphones, History, ListMusic, LogIn, LogOut, Minimize2, Search, Settings as SettingsIcon, Sparkles,
 } from 'lucide-react';
 import { LyricsPanel, LyricsStage, PlayerBar, QueuePanel } from './components';
 import {
@@ -8,11 +8,13 @@ import {
   SettingsPage, type LibraryContext,
 } from './pages';
 import { FavoritesPage } from './favorites-page';
+import { RecommendPage } from './recommend-page';
 import { APP_BRAND_LABEL } from '../shared/app-name.mjs';
 import { QUALITY_LABELS, fallbackQuality } from '../shared/qualities.mjs';
 import { musicSessionExpired } from '../shared/session-expiry.mjs';
 import {
-  autosaveDelay, buildShuffleOrder, historyReportDecision, onEndedAction, planPlayNext, popPlayHistory, pushPlayHistory, stepCursor,
+  autosaveDelay, buildShuffleOrder, historyReportDecision, onEndedAction, planPlayNext, planRemoveFromQueue,
+  popPlayHistory, pushPlayHistory, stepCursor,
 } from './player.mjs';
 import { activeLyricIndex } from '../lyrics.mjs';
 import { fontStackFor, tintFromHex } from './theme.mjs';
@@ -22,23 +24,23 @@ import type {
 } from '../shared/types';
 
 type View =
-  | { name: 'favorites' } | { name: 'playlists' } | { name: 'search' } | { name: 'history' } | { name: 'settings' }
+  | { name: 'favorites' } | { name: 'playlists' } | { name: 'recommend' } | { name: 'search' } | { name: 'history' } | { name: 'settings' }
   | { name: 'playlist'; playlist: Playlist }
   | { name: 'album'; albumId: string }
   | { name: 'artist'; artistId: string };
 
 const VIEW_TITLES: Record<View['name'], string> = {
-  favorites: '我的收藏', playlists: '我的歌单', playlist: '歌单详情', search: '搜索',
+  favorites: '我的收藏', playlists: '我的歌单', recommend: '猜你喜欢', playlist: '歌单详情', search: '搜索',
   history: '播放历史', settings: '设置', album: '专辑', artist: '歌手',
 };
 
 const VIEW_EYEBROWS: Record<View['name'], string> = {
-  favorites: 'Library', playlists: 'Collections', playlist: 'Collection', search: 'Search',
+  favorites: 'Library', playlists: 'Collections', recommend: 'Discover', playlist: 'Collection', search: 'Search',
   history: 'History', settings: 'Preferences', album: 'Album', artist: 'Artist',
 };
 
 const NAV_ICONS = {
-  favorites: Heart, playlists: ListMusic, search: Search, history: History, settings: SettingsIcon,
+  favorites: Heart, playlists: ListMusic, recommend: Sparkles, search: Search, history: History, settings: SettingsIcon,
 };
 
 // Runtime tint map: the CSS keeps red as its default so the first paint is already correct.
@@ -127,7 +129,7 @@ export function App() {
   const favoritePending = useRef(new Set<string>());
   const playCommand = useRef<{ [K in PlayerCommand]: () => void }>({
     'play-pause': () => {}, next: () => {}, previous: () => {}, 'volume-up': () => {},
-    'volume-down': () => {}, mute: () => {}, like: () => {},
+    'volume-down': () => {}, mute: () => {}, like: () => {}, 'toggle-desktop-lyrics': () => {},
   });
   const [localHistory, setLocalHistory] = useState<Track[]>([]);
   const [volume, setVolume] = useState(0.85);
@@ -137,6 +139,7 @@ export function App() {
   const [shuffle, setShuffle] = useState(false);
   const desktopLyricsRef = useRef(false);
   const [desktopLyricsEnabled, setDesktopLyricsEnabled] = useState(false);
+  const [miniPlayerEnabled, setMiniPlayerEnabled] = useState(false);
   // expireTime is an unverified-timezone hint, so this only flips once even the latest reading
   // has passed — used for the sidebar label, while real failures stay decided by the provider.
   const sessionExpired = status?.authenticated === true && musicSessionExpired(status.musicExpireTime);
@@ -252,7 +255,10 @@ export function App() {
       const track = queueRef.current[order.current[cursorRef.current]];
       if (track) recordLocalHistory(track);
     };
-    const waiting = () => { if (isCurrentSource() && !element.paused) { setBuffering(true); setPlaying(false); } };
+    // Buffering is not a change of playback intent: the audio is still "playing" (paused === false),
+    // it is merely waiting for data. Flipping `playing` here made the transport icon and the
+    // system media controls disagree with the main window for the whole buffering window.
+    const waiting = () => { if (isCurrentSource() && !element.paused) { setBuffering(true); setPlaying(true); } };
     const paused = () => { if (isCurrentSource()) { setBuffering(false); setPlaying(false); } };
     const failed = () => {
       if (!isCurrentSource()) return;
@@ -325,18 +331,48 @@ export function App() {
     return () => window.clearTimeout(positionTimer.current);
   }, [position, queueReady]);
 
+  // Windows system media controls (SMTC) and the desktop mini bar must mirror the SAME snapshot.
+  // Both read from currentTrack/playing below, so a single render keeps title/artist/cover/state
+  // consistent. Handlers are registered once and delegate to playCommand.current (always fresh),
+  // never closing over a stale goNext/goPrevious/togglePlayback from an earlier render.
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const session = navigator.mediaSession;
+    try {
+      session.setActionHandler('play', () => { if (audio.current?.paused) playCommand.current['play-pause'](); });
+      session.setActionHandler('pause', () => { if (audio.current && !audio.current.paused) audio.current.pause(); });
+      session.setActionHandler('nexttrack', () => playCommand.current.next());
+      session.setActionHandler('previoustrack', () => playCommand.current.previous());
+      session.setActionHandler('seekto', details => {
+        const element = audio.current;
+        if (!element || typeof details.seekTime !== 'number' || !Number.isFinite(details.seekTime)) return;
+        const target = Math.max(0, Math.min(details.seekTime, Number.isFinite(element.duration) ? element.duration : details.seekTime));
+        element.currentTime = target;
+        setPosition(target);
+      });
+    } catch { /* Some actions are unsupported on older OS builds; the rest still register. */ }
+  }, []);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const session = navigator.mediaSession;
+    // Artwork uses the exact same allow-listed cover URL the mini bar receives, so the taskbar
+    // thumbnail, the mini bar and the in-app cover never disagree about which image to show.
+    const artwork = currentTrack?.coverUrl
+      ? [{ src: currentTrack.coverUrl, sizes: '512x512', type: 'image/jpeg' }]
+      : [];
     session.metadata = currentTrack
-      ? new MediaMetadata({ title: currentTrack.title, artist: currentTrack.artists.map(artist => artist.name).join(' / '), album: currentTrack.album?.title })
+      ? new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artists.map(artist => artist.name).join(' / '),
+        album: currentTrack.album?.title ?? '',
+        artwork,
+      })
       : null;
+    // Buffering no longer flips `playing`, so this stays 'playing' while data loads instead of
+    // claiming 'paused' and contradicting the transport icon in the app and mini bar.
     session.playbackState = playing ? 'playing' : currentTrack ? 'paused' : 'none';
-    session.setActionHandler('play', () => { if (audio.current?.paused) togglePlayback(); });
-    session.setActionHandler('pause', () => audio.current?.pause());
-    session.setActionHandler('nexttrack', () => goNext());
-    session.setActionHandler('previoustrack', () => goPrevious());
-  }, [currentTrack?.id, playing]);
+  }, [currentTrack, playing]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator) || !duration) return;
@@ -400,6 +436,21 @@ export function App() {
     });
   }, [desktopLyricsEnabled, position, lyrics, currentTrack, lyricOffset, lyricRevision]);
 
+  // One-way, sanitized state for the desktop mini bar. It carries no URLs/tokens, only what
+  // the user can already see in the main player.
+  useEffect(() => {
+    const favorite = currentTrack ? knownFavoriteIds.has(currentTrack.id) && favoriteIds.has(currentTrack.id) : false;
+    window.desktop.miniPlayer.update({
+      hasTrack: !!currentTrack,
+      title: currentTrack?.title ?? '',
+      artist: currentTrack?.artists.map(artist => artist.name).join(' / ') ?? '',
+      coverUrl: currentTrack?.coverUrl ?? null,
+      playing,
+      favorite,
+      desktopLyrics: desktopLyricsEnabled,
+    });
+  }, [currentTrack, playing, favoriteIds, knownFavoriteIds, desktopLyricsEnabled]);
+
   async function importLocalLyrics() {
     const trackId = currentTrack?.id;
     if (!trackId) return;
@@ -435,6 +486,7 @@ export function App() {
     syncHistoryRef.current = next.syncHistory;
     desktopLyricsRef.current = next.desktopLyrics.enabled;
     setDesktopLyricsEnabled(next.desktopLyrics.enabled);
+    setMiniPlayerEnabled(next.miniPlayer?.enabled ?? true);
   }
 
   function identityOrder(count: number): number[] { return Array.from({ length: count }, (_, index) => index); }
@@ -543,6 +595,36 @@ export function App() {
       : `已将「${track.title}」设为下一首播放。`);
   }
 
+  // Right-click "从播放队列移除": keep the physical queue, play order and previous-track
+  // history consistent. If the removed row was playing, advance to the next queued song.
+  function removeFromQueue(track: Track) {
+    const plan = planRemoveFromQueue(queueRef.current, order.current, cursorRef.current, track.id);
+    if (!plan) { setMessage('这首歌不在当前播放队列中。'); return; }
+    queueRef.current = plan.queue;
+    order.current = plan.order;
+    cursorRef.current = plan.cursor;
+    playHistory.current = playHistory.current
+      .map(value => plan.remapCursor(value))
+      .filter(value => value >= 0 && value < plan.order.length);
+    setQueue(plan.queue);
+    setCursor(plan.cursor);
+    if (plan.activeRemoved) {
+      if (audio.current) { audio.current.pause(); audio.current.removeAttribute('src'); audio.current.load(); }
+      activeAudioSource.current = '';
+      setPlaying(false); setBuffering(false); setPosition(0); setDuration(0); setActualQuality('unknown');
+      positionRef.current = 0;
+      if (plan.cursor >= 0) void playAtRef.current(plan.cursor);
+    }
+    setMessage(`已从播放队列移除「${track.title}」。`);
+  }
+
+  function removeFromLocalHistory(track: Track) {
+    const next = localHistory.filter(item => item.id !== track.id);
+    setLocalHistory(next);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch { /* Storage is best effort. */ }
+    setMessage(`已从本机播放记录移除「${track.title}」。`);
+  }
+
   function play(tracks: Track[], index: number) {
     if (!tracks.length) return;
     const target = tracks[index];
@@ -593,6 +675,7 @@ export function App() {
     'volume-up': () => changeVolume(Math.min(1, Math.round((volumeRef.current + 0.1) * 10) / 10)),
     'volume-down': () => changeVolume(Math.max(0, Math.round((volumeRef.current - 0.1) * 10) / 10)),
     mute: toggleMute,
+    'toggle-desktop-lyrics': () => { void toggleDesktopLyrics(); },
     like: () => {
       const track = currentTrack;
       if (!track) { setMessage('当前没有播放中的歌曲。'); return; }
@@ -695,6 +778,22 @@ export function App() {
     changeVolume(volume > 0 ? 0 : (lastAudibleVolume.current || 0.85));
   }
 
+  async function toggleDesktopLyrics() {
+    const current = settings?.desktopLyrics ?? { enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 };
+    const enabled = !current.enabled;
+    if (await updateSettings({ desktopLyrics: { ...current, enabled } })) {
+      setMessage(enabled ? '已开启桌面歌词，悬浮窗会跟随当前播放显示。' : '已关闭桌面歌词。');
+    }
+  }
+
+  async function toggleMiniPlayer() {
+    const current = settings?.miniPlayer ?? { enabled: true, position: null };
+    const enabled = !current.enabled;
+    if (await updateSettings({ miniPlayer: { ...current, enabled } })) {
+      setMessage(enabled ? '已显示桌面状态栏播控条。' : '已隐藏桌面状态栏播控条。');
+    }
+  }
+
   function favoriteOf(trackId: string): boolean | undefined { return knownFavoriteIds.has(trackId) ? favoriteIds.has(trackId) : undefined; }
   function setFavoriteState(trackId: string, favorite: boolean) {
     setKnownFavoriteIds(previous => new Set(previous).add(trackId));
@@ -791,6 +890,9 @@ export function App() {
     play,
     playNext,
     toggleFavorite,
+    isInQueue: trackId => queueRef.current.some(track => track.id === trackId),
+    removeFromQueue,
+    removeFromLocalHistory,
     openAlbum: albumId => setView({ name: 'album', albumId }),
     openArtist: artistId => setView({ name: 'artist', artistId }),
     openPlaylist,
@@ -808,6 +910,7 @@ export function App() {
   const navItems: { key: keyof typeof NAV_ICONS; label: string }[] = [
     { key: 'favorites', label: '我的收藏' },
     { key: 'playlists', label: '我的歌单' },
+    { key: 'recommend', label: '猜你喜欢' },
     { key: 'search', label: '搜索' },
     { key: 'history', label: '播放历史' },
     { key: 'settings', label: '设置' },
@@ -817,6 +920,7 @@ export function App() {
     switch (view.name) {
       case 'favorites': return null;
       case 'playlists': return <PlaylistsPage ctx={ctx} />;
+      case 'recommend': return <RecommendPage ctx={ctx} />;
       case 'playlist': return <PlaylistDetailPage ctx={ctx} playlist={view.playlist} />;
       case 'search': return <SearchPage ctx={ctx} />;
       case 'history': return <HistoryPage ctx={ctx} />;
@@ -830,7 +934,8 @@ export function App() {
   const viewHint =
     view.name === 'favorites' ? '收藏的全部歌曲，向下滚动自动加载'
       : view.name === 'playlists' ? '自建、收藏与榜单'
-        : view.name === 'search' ? '按歌名或艺人查找'
+        : view.name === 'recommend' ? '根据收藏歌曲与收藏歌单，推荐同歌手和同专辑的作品'
+          : view.name === 'search' ? '按歌名或艺人查找'
           : view.name === 'history' ? '本机记录与华为服务端记录'
             : view.name === 'settings' ? '播放、界面与隐私偏好'
               : '';
@@ -863,6 +968,9 @@ export function App() {
           <p className="page-sub">{status?.authenticated || view.name === 'settings' ? viewHint : '登录后即可浏览你的音乐库'}</p>
         </div>
         <div className="actions">
+          <button className="ghost" title="最小化到任务栏托盘，点击托盘图标恢复" onClick={() => void window.desktop.window.hideToTray()}>
+            <Minimize2 size={14} />最小化到托盘
+          </button>
           {status?.authenticated
             ? <>
               <button className="ghost" onClick={login} disabled={busy}><LogIn size={14} />重新登录</button>
@@ -942,9 +1050,13 @@ export function App() {
       onToggleRepeat={toggleRepeat}
       onToggleShuffle={toggleShuffle}
       onToggleLyrics={() => setLyricsOpen(value => { if (!value) setQueueOpen(false); return !value; })}
+      onToggleDesktopLyrics={() => void toggleDesktopLyrics()}
+      onToggleMiniPlayer={() => void toggleMiniPlayer()}
       onToggleQueue={() => setQueueOpen(value => { if (!value) setLyricsOpen(false); return !value; })}
       onOpenStage={() => setStageOpen(true)}
       lyricsOpen={lyricsOpen}
+      desktopLyricsEnabled={desktopLyricsEnabled}
+      miniPlayerEnabled={miniPlayerEnabled}
       queueOpen={queueOpen}
       queueCount={queue.length}
       favorite={currentTrack ? favoriteOf(currentTrack.id) : undefined}

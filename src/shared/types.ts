@@ -96,9 +96,23 @@ export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
 
 // Actions the main process can request from the renderer: media keys, tray items and
 // user-configured global shortcuts all arrive through the same command channel.
-export type PlayerCommand = 'play-pause' | 'next' | 'previous' | 'volume-up' | 'volume-down' | 'mute' | 'like';
-// A shortcut action maps to an Electron accelerator string; '' disables the binding.
-export type ShortcutAction = PlayerCommand;
+export type PlayerCommand = 'play-pause' | 'next' | 'previous' | 'volume-up' | 'volume-down' | 'mute' | 'like' | 'toggle-desktop-lyrics';
+// Shortcuts may only bind the transport commands; the lyrics toggle is a UI action from the
+// mini bar and never appears in the shortcut settings list.
+export type ShortcutAction = Exclude<PlayerCommand, 'toggle-desktop-lyrics'>;
+// Commands emitted by the desktop mini bar. 'show-main' is handled in the main process;
+// every other value is a normal player command forwarded to the main window renderer.
+export type MiniPlayerCommand = PlayerCommand | 'show-main';
+// Sanitized one-way state pushed from the main renderer to the frameless mini window.
+export type MiniPlayerState = {
+  hasTrack: boolean;
+  title: string;
+  artist: string;
+  coverUrl: string | null;
+  playing: boolean;
+  favorite: boolean;
+  desktopLyrics: boolean;
+};
 export type ShortcutsSettings = Record<ShortcutAction, string>;
 
 // Desktop lyrics overlay window: enabled toggles the window, locked enables mouse pass-through,
@@ -143,6 +157,12 @@ export type AppearanceSettings = {
   customFont: string;
 };
 
+// Compact always-on-top playback bar docked near the bottom of the desktop.
+export type MiniPlayerSettings = {
+  enabled: boolean;
+  position: { x: number; y: number } | null;
+};
+
 export type AppSettings = {
   closeBehavior: 'quit' | 'tray';
   quality: Quality;
@@ -159,6 +179,8 @@ export type AppSettings = {
   shortcuts: ShortcutsSettings;
   // Floating always-on-top desktop lyrics overlay.
   desktopLyrics: DesktopLyricsSettings;
+  // Compact desktop transport bar with cover, track title and quick controls.
+  miniPlayer: MiniPlayerSettings;
 };
 
 export type SavedQueue = {
@@ -207,7 +229,11 @@ export type DesktopApi = {
     load(): Promise<Result<SavedQueue | null>>;
     save(input: SavedQueue): Promise<Result<void>>;
   };
-  window: { minimize(): Promise<void>; setCloseBehavior(input: 'quit' | 'tray'): Promise<Result<AppSettings>> };
+  window: {
+    minimize(): Promise<void>;
+    hideToTray(): Promise<void>;
+    setCloseBehavior(input: 'quit' | 'tray'): Promise<Result<AppSettings>>;
+  };
   fonts: { list(): Promise<Result<{ families: string[] }>> };
   lyrics: {
     /** Opens a picker; resolves null when the user cancels. */
@@ -218,8 +244,9 @@ export type DesktopApi = {
   };
   app: { quit(): Promise<void> };
   player: { onCommand(listener: (command: PlayerCommand) => void): () => void };
-  // One-way push channel for the desktop lyrics overlay (send, not invoke: high frequency).
+  // One-way push channels for the frameless desktop surfaces (send, not invoke: high frequency).
   desktopLyrics: { update(input: DesktopLyricsUpdate): void };
+  miniPlayer: { update(input: MiniPlayerState): void };
   onNotice(listener: (message: string) => void): () => void;
 };
 

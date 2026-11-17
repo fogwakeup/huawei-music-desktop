@@ -1,7 +1,9 @@
 // Pure settings/queue sanitation so persisted JSON can never widen the IPC contract.
 /** @type {import('../shared/types').AppSettings} */
 export const DEFAULT_SETTINGS = Object.freeze({
-  closeBehavior: 'quit',
+  // Closing the window keeps music playing in the tray by default; the settings page can
+  // still switch back to a real quit.
+  closeBehavior: 'tray',
   quality: 'standard',
   volume: 0.85,
   repeatMode: 'off',
@@ -26,7 +28,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     mute: 'Control+Alt+M',
     like: 'Control+Alt+L',
   }),
-  desktopLyrics: Object.freeze({ enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }),
+  desktopLyrics: Object.freeze({ enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }),
+  miniPlayer: Object.freeze({ enabled: true, position: null }),
 });
 
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
@@ -92,6 +95,9 @@ export function sanitizeSettings(input, fallback = DEFAULT_SETTINGS) {
   if (raw.desktopLyrics !== undefined) {
     next.desktopLyrics = sanitizeDesktopLyrics(raw.desktopLyrics, base.desktopLyrics);
   }
+  if (raw.miniPlayer !== undefined) {
+    next.miniPlayer = sanitizeMiniPlayer(raw.miniPlayer, base.miniPlayer);
+  }
   return next;
 }
 
@@ -110,6 +116,20 @@ export function sanitizeDesktopLyrics(input, fallback = DEFAULT_SETTINGS.desktop
     position,
     fontColor: typeof raw.fontColor === 'string' && HEX_COLOR.test(raw.fontColor) ? raw.fontColor.toLowerCase() : base.fontColor,
     backgroundOpacity: clampNumber(raw.backgroundOpacity, 0, 1, base.backgroundOpacity),
+  };
+}
+
+/** @returns {import('../shared/types').MiniPlayerSettings} */
+export function sanitizeMiniPlayer(input, fallback = DEFAULT_SETTINGS.miniPlayer) {
+  const base = { ...DEFAULT_SETTINGS.miniPlayer, ...(fallback ?? {}) };
+  if (!input || typeof input !== 'object') return base;
+  const raw = /** @type {Record<string, unknown>} */ (input);
+  const position = raw.position && typeof raw.position === 'object' && Number.isInteger(raw.position.x)
+    && Number.isInteger(raw.position.y) && Math.abs(raw.position.x) <= 32768 && Math.abs(raw.position.y) <= 32768
+    ? { x: raw.position.x, y: raw.position.y } : null;
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : base.enabled,
+    position,
   };
 }
 

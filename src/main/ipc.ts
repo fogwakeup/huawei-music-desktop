@@ -8,6 +8,7 @@ import { parseLyrics } from '../lyrics.mjs';
 import { fail, ok } from '../shared/result';
 import { QUALITY_ORDER } from '../shared/qualities.mjs';
 import type { DesktopLyricsModule } from './desktop-lyrics';
+import type { MiniPlayerModule } from './mini-player';
 import type { LyricsDoc, Quality, SavedQueue } from '../shared/types';
 
 export function registerIpc(
@@ -17,7 +18,10 @@ export function registerIpc(
     onCloseBehavior?: (value: 'quit' | 'tray') => void;
     onShortcuts?: (settings: import('../shared/types').AppSettings) => void;
     onDesktopLyrics?: (settings: import('../shared/types').AppSettings) => void;
+    onMiniPlayer?: (settings: import('../shared/types').AppSettings) => void;
+    onHideToTray?: () => void;
     desktopLyrics?: DesktopLyricsModule;
+    miniPlayer?: MiniPlayerModule;
   } = {},
 ): void {
   const guard = (event: Electron.IpcMainInvokeEvent) => {
@@ -160,6 +164,7 @@ export function registerIpc(
     const next = await updateSettings(input);
     hooks.onShortcuts?.(next);
     hooks.onDesktopLyrics?.(next);
+    hooks.onMiniPlayer?.(next);
     return ok(next);
   });
   // One-way listeners must be idempotent: registerIpc runs again whenever the window is
@@ -168,6 +173,11 @@ export function registerIpc(
   ipcMain.on(channels.desktopLyricsUpdate, (event, payload) => {
     if (!isAllowedSender(window, event)) return;
     hooks.desktopLyrics?.forwardUpdate(payload);
+  });
+  ipcMain.removeAllListeners(channels.miniPlayerUpdate);
+  ipcMain.on(channels.miniPlayerUpdate, (event, payload) => {
+    if (!isAllowedSender(window, event)) return;
+    hooks.miniPlayer?.forwardState(payload);
   });
   ipcMain.handle(channels.fontsList, async event => { guard(event); return ok({ families: await listSystemFonts() }); });
   ipcMain.handle(channels.lyricsCacheInfo, async event => { guard(event); return ok(await lyricsCacheInfo()); });
@@ -222,5 +232,10 @@ export function registerIpc(
     return ok(next);
   });
   ipcMain.handle(channels.windowMinimize, async event => { guard(event); window.minimize(); });
+  ipcMain.handle(channels.windowHideToTray, async event => {
+    guard(event);
+    hooks.onHideToTray?.();
+    return ok(undefined);
+  });
   ipcMain.handle(channels.appQuit, async event => { guard(event); app.quit(); });
 }

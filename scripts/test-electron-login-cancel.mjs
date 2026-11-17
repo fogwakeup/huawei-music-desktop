@@ -9,12 +9,19 @@ import { APP_DISPLAY_NAME } from '../src/shared/app-name.mjs';
 
 const userData = await mkdtemp(join(tmpdir(), 'huawei-login-cancel-'));
 let app;
+// The mini bar and desktop lyrics are file:// helper windows; only http(s) documents are
+// the temporary official login view.
+const loginPages = () => app.windows().filter(page => {
+  try { return ['http:', 'https:'].includes(new URL(page.url()).protocol); } catch { return false; }
+});
+const mainWindows = () => app.evaluate(({ BrowserWindow }, title) =>
+  BrowserWindow.getAllWindows().filter(window => window.getTitle() === title).length, APP_DISPLAY_NAME);
 
 async function openLoginWindow(mainWindow) {
   await mainWindow.getByRole('button', { name: '扫码登录' }).click();
   let loginWindow;
   for (let attempt = 0; attempt < 60 && !loginWindow; attempt++) {
-    loginWindow = app.windows().find(window => window !== mainWindow);
+    loginWindow = loginPages().find(window => window !== mainWindow);
     if (!loginWindow) await mainWindow.waitForTimeout(250);
   }
   assert.ok(loginWindow, 'production login flow did not open its isolated window');
@@ -25,8 +32,7 @@ async function openLoginWindow(mainWindow) {
   const host = new URL(loginWindow.url()).hostname;
   assert.equal(isAllowedLoginUrl(loginWindow.url()), true, `unexpected login origin: ${host}`);
   // The whole point of the embedded host: the official page must not create a second OS window.
-  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1,
-    'login opened an extra OS window');
+  assert.equal(await mainWindows(), 1, 'login opened an extra main window');
   await mainWindow.getByRole('button', { name: '取消登录' }).waitFor({ timeout: 5000 });
   return { loginWindow, host };
 }
@@ -38,8 +44,8 @@ async function cancelLogin(mainWindow) {
 async function closeAndCheckCancellation(mainWindow) {
   await cancelLogin(mainWindow);
   await mainWindow.getByRole('status').getByText(/用户取消登录/, { exact: false }).waitFor({ timeout: 5000 });
-  assert.equal(app.windows().length, 1, 'embedded login view remained after cancellation');
-  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+  assert.equal(loginPages().length, 0, 'embedded login view remained after cancellation');
+  assert.equal(await mainWindows(), 1);
   assert.equal(await mainWindow.title(), APP_DISPLAY_NAME);
   assert.equal(await mainWindow.getByRole('button', { name: '扫码登录' }).isEnabled(), true);
   assert.equal(await mainWindow.getByRole('button', { name: '取消登录' }).count(), 0, 'cancel bar stayed after cancellation');
@@ -48,15 +54,15 @@ async function closeAndCheckCancellation(mainWindow) {
 async function closeAndCheckStorageFailure(mainWindow) {
   await cancelLogin(mainWindow);
   await mainWindow.getByRole('status').getByText(/无法清理临时登录会话/, { exact: false }).waitFor({ timeout: 5000 });
-  assert.equal(app.windows().length, 1, 'login window remained after storage cleanup failure');
+  assert.equal(loginPages().length, 0, 'login window remained after storage cleanup failure');
   assert.equal(await mainWindow.getByRole('button', { name: '扫码登录' }).isEnabled(), true);
   assert.equal(await mainWindow.getByRole('button', { name: '退出' }).count(), 0, 'failed login was presented as authenticated');
 }
 
 async function checkInitializationFailure(mainWindow) {
   await mainWindow.getByRole('status').getByText(/synthetic-handler-install-failure/, { exact: false }).waitFor({ timeout: 5000 });
-  assert.equal(app.windows().length, 1, 'partial login view remained after handler setup failure');
-  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+  assert.equal(loginPages().length, 0, 'partial login view remained after handler setup failure');
+  assert.equal(await mainWindows(), 1);
   assert.equal(await mainWindow.getByRole('button', { name: '扫码登录' }).isEnabled(), true);
   assert.equal(await mainWindow.getByRole('button', { name: '退出' }).count(), 0, 'handler setup failure was presented as authenticated');
 }
@@ -74,7 +80,7 @@ async function submitInvalidState(mainWindow, loginWindow) {
   });
   await loginWindow.locator('#synthetic-state-probe').click({ noWaitAfter: true });
   await mainWindow.getByRole('status').getByText(/OAuth state 不匹配/).waitFor({ timeout: 8000 });
-  assert.equal(app.windows().length, 1, 'login window remained after rejecting an invalid callback');
+  assert.equal(loginPages().length, 0, 'login window remained after rejecting an invalid callback');
   assert.equal(await mainWindow.getByRole('button', { name: '扫码登录' }).isEnabled(), true);
 }
 

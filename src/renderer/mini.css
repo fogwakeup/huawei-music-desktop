@@ -1,0 +1,108 @@
+/* Desktop mini transport bar: light glass capsule docked above the Windows taskbar. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  font-family: 'Inter', 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  color: #26282d;
+}
+
+.mini-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: calc(100% - 12px);
+  height: calc(100% - 8px);
+  margin: 4px 6px;
+  padding: 0 10px 0 8px;
+  border: 1px solid rgba(32, 36, 44, 0.09);
+  border-radius: 14px;
+  background: rgba(248, 249, 251, 0.93);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 8px 26px rgba(30, 34, 42, 0.16), 0 1px 3px rgba(30, 34, 42, 0.08);
+}
+
+.mini-info {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  -webkit-app-region: drag;
+  cursor: default;
+}
+
+.mini-cover {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  color: #8b909a;
+  background: linear-gradient(145deg, #eef0f3, #dfe3e8);
+}
+
+.mini-cover img { width: 100%; height: 100%; object-fit: cover; }
+.mini-cover [hidden] { display: none; }
+
+.mini-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mini-text strong, .mini-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mini-text strong { font-size: 12px; font-weight: 600; line-height: 1.35; }
+.mini-text small { font-size: 10px; line-height: 1.35; color: #7c828d; }
+
+.mini-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.mini-controls button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  color: #4a4f58;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.14s ease;
+}
+
+.mini-controls button svg { width: 15px; height: 15px; }
+.mini-controls button:hover:not(:disabled) { background: rgba(40, 44, 52, 0.08); color: #1d2025; }
+.mini-controls button:active:not(:disabled) { transform: scale(0.94); }
+.mini-controls button:disabled { opacity: 0.35; cursor: default; }
+
+.mini-controls .mini-play {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: #fff;
+  background: #c8202e;
+  box-shadow: 0 2px 8px rgba(200, 32, 46, 0.28);
+}
+.mini-controls .mini-play svg { width: 16px; height: 16px; }
+.mini-controls .mini-play:hover:not(:disabled) { background: #a51724; color: #fff; }
+
+.mini-divider { width: 1px; height: 18px; margin: 0 3px; background: rgba(40, 44, 52, 0.12); }
+
+#mini-like.on { color: #c8202e; }
+#mini-lyrics.on { color: #c8202e; background: rgba(200, 32, 46, 0.09); }
+.mini-lyric-glyph { font-size: 12px; font-weight: 700; line-height: 1; }
+.mini-controls .mini-close { width: 24px; height: 24px; color: #9aa0a9; }
+.mini-controls .mini-close svg { width: 13px; height: 13px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-controls button { transition: none; }
+}

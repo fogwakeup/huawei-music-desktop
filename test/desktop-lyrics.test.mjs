@@ -36,7 +36,7 @@ test('desktop lyrics payloads clamp long text and strip non-string fields', () =
 
 test('desktop lyrics settings sanitize flags, positions and appearance', () => {
   assert.deepEqual(sanitizeDesktopLyrics(null),
-    { enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
+    { enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
   assert.deepEqual(sanitizeDesktopLyrics({ enabled: true, locked: 'x', position: { x: 10, y: 20 } }),
     { enabled: true, locked: false, position: { x: 10, y: 20 }, fontColor: '#ffffff', backgroundOpacity: 0.55 });
   assert.equal(sanitizeDesktopLyrics({ position: { x: 1.5, y: 20 } }).position, null, 'fractional coords rejected');
@@ -68,5 +68,5 @@ test('settings sanitize integrates the desktop lyrics block', () => {
     { enabled: true, locked: true, position: { x: -8, y: 40 }, fontColor: '#ffe680', backgroundOpacity: 0.2 });
   const untouched = sanitizeSettings({ volume: 0.4 });
   assert.deepEqual(untouched.desktopLyrics,
-    { enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
+    { enabled: true, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 });
 });

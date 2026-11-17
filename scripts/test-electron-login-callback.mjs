@@ -6,8 +6,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as playwright } from 'playwright-core';
+import { APP_DISPLAY_NAME } from '../src/shared/app-name.mjs';
 
 const profile = await mkdtemp(join(tmpdir(), 'huawei-login-callback-'));
+// Desktop helper windows (mini bar / lyrics) also appear in Electron's window list; only
+// http(s) documents are the temporary official login view.
+const loginPages = () => app.windows().filter(page => {
+  try { return ['http:', 'https:'].includes(new URL(page.url()).protocol); } catch { return false; }
+});
 let app;
 const serviceOrigin = 'https://oauth-login1.cloud.huawei.com';
 const servicePath = '/oauth2/v3/loginCallback';
@@ -17,7 +23,7 @@ async function openFixture(mainWindow, mode) {
   await mainWindow.getByRole('button', { name: '扫码登录' }).click();
   let login;
   for (let i = 0; i < 100 && !login; i++) {
-    login = app.windows().find(page => page !== mainWindow);
+    login = loginPages().find(page => page !== mainWindow);
     if (!login) await mainWindow.waitForTimeout(50);
   }
   assert.ok(login, 'production login window must open');
@@ -114,7 +120,7 @@ try {
     assert.equal(record.callbackRequested, true);
     assert.equal(record.cleaned, true);
     assert.equal(record.requests.some(r => r.path.includes('/token')), false, 'invalid state must never reach token exchange');
-    assert.equal(app.windows().length, 1);
+    assert.equal(loginPages().length, 0);
     const status = await mainWindow.evaluate(() => window.desktop.auth.status());
     assert.equal(status.data.authenticated, false, 'a navigation fixture is not a successful login');
     console.log(JSON.stringify({ mode, serviceOrigin, servicePath, intermediateReached: true,
@@ -130,8 +136,9 @@ try {
     assert.equal(record.serviceReached, false);
     await mainWindow.getByRole('button', { name: '取消登录' }).click();
     await mainWindow.getByRole('status').getByText(/用户取消登录/).waitFor({ timeout: 5000 });
-    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1,
-      'cancelling the embedded login must not leave an OS window');
+    assert.equal(loginPages().length, 0, 'cancelling the embedded login must not leave a login page');
+    assert.equal(await app.evaluate(({ BrowserWindow }, title) => BrowserWindow.getAllWindows().filter(window => window.getTitle() === title).length, APP_DISPLAY_NAME), 1,
+      'cancelling the embedded login must not leave another main window');
     console.log(JSON.stringify({ mode, blockedBeforeRequest: true, authenticated: false, extraWindow: false }));
   }
 } finally {

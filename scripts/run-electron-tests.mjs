@@ -9,6 +9,7 @@ const suites = {
   ui: [['node', 'scripts/test-electron-ui.mjs']],
   business: [['node', 'scripts/test-electron-business.mjs']],
   favorites: [['node', 'scripts/test-electron-favorites.mjs']],
+  recommend: [['node', 'scripts/test-electron-recommend.mjs']],
   packaged: [['node', 'scripts/test-packaged.mjs', ...process.argv.slice(3)]],
   callback: [['node', 'scripts/test-electron-login-callback.mjs']],
   cancel: [['node', 'scripts/test-electron-login-cancel.mjs']],
