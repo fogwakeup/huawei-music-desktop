@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { TrackTable } from './components';
 import {
-  DIMENSION_LABELS, LANGUAGE_LABELS, VERSION_LABELS,
-  batchOf, buildRecommendationModel, buildTasteProfile, formatClock, rankCandidates,
+  LANGUAGE_LABELS, VERSION_LABELS,
+  batchOf, buildRecommendationModel, buildScoreProfile, buildSearchKeywords, buildTasteProfile,
+  buildThemeTokens, formatClock, rankCandidates, secondHopSeeds,
 } from './recommend.mjs';
 import type { LibraryContext } from './pages';
 import type { Result, Track } from '../shared/types';
@@ -11,9 +12,14 @@ import type { Result, Track } from '../shared/types';
 const PAGE = 50;
 // Bounded so opening the page stays fast even for very large libraries.
 const MAX_SEED_FAVORITE_PAGES = 2;
-const MAX_SEED_PLAYLISTS = 4;
-const MAX_ARTIST_SEEDS = 8;
-const MAX_ALBUM_SEEDS = 5;
+const MAX_SEED_PLAYLISTS = 3;
+const MAX_ARTIST_SEEDS = 4;
+const MAX_ALBUM_SEEDS = 3;
+// New sources that actually break out of the saved artist/album bubble.
+const MAX_SECOND_HOP_ARTISTS = 3;
+const MAX_SECOND_HOP_ALBUMS = 2;
+const MAX_SEARCH_KEYWORDS = 3;
+const MAX_CHART_PLAYLISTS = 2;
 const POOL_LIMIT = 120;
 const BATCH_SIZE = 20;
 // Seeds carry different confidence: a saved song says more than a playlist entry, which in
@@ -21,8 +27,6 @@ const BATCH_SIZE = 20;
 const FAVORITE_WEIGHT = 1;
 const PLAYLIST_WEIGHT = 0.7;
 const HISTORY_WEIGHT = 0.5;
-const DIMENSION_SUMMARY = [DIMENSION_LABELS.artist, DIMENSION_LABELS.album, DIMENSION_LABELS.playlist,
-  DIMENSION_LABELS.language, DIMENSION_LABELS.duration].join(' / ');
 
 type TasteSeed = { id: string; name: string; count: number };
 type CandidateGroup = { key: string; weight: number; tracks: Track[] };
@@ -39,11 +43,11 @@ async function readResult<T>(action: Promise<Result<T>>): Promise<T | null> {
 
 /**
  * A local recommender page. The provider has no usable recommendation endpoint, so taste is
- * derived from what the user actually keeps (saved songs, collected playlists, play history)
- * and candidates are the catalogue rows we can really fetch: same artist, same album, and the
- * songs sitting in the collected playlists. Every candidate is then ranked on five explainable
- * dimensions — artist / album / playlist co-occurrence / language / duration habits — instead
- * of a single "more of the same artist" pass.
+ * derived from what the user actually keeps. Every song is scored on language / version /
+ * duration / recurring title words / playlist co-occurrence — never on artist identity — and
+ * candidates are ranked by closeness to the user's target score. Same-artist and same-album
+ * songs are demoted, and the pool is widened with second-hop artists/albums, profile-driven
+ * search results and chart playlists so the list cannot collapse into one discography.
  */
 export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
   const [loading, setLoading] = useState(false);
@@ -67,6 +71,7 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
     context.setBusy(true);
     try {
       const seeds: { track: Track; weight: number }[] = [];
+      const favoriteTracks: Track[] = [];
       const favoriteIds = new Set<string>();
       const seenSeeds = new Set<string>();
       const addSeeds = (tracks: Track[], weight: number) => {
@@ -87,6 +92,7 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         for (const track of result.tracks) {
           context.setFavoriteState(track.id, true);
           favoriteIds.add(track.id);
+          favoriteTracks.push(track);
         }
         addSeeds(result.tracks, FAVORITE_WEIGHT);
         start = result.nextStart;
@@ -95,9 +101,12 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
 
       // Collected playlists broaden the taste profile and double as a candidate source:
       // a song that sits in several of them is a real signal, favourited or not.
+      // Chart playlists are candidates only — popularity is not the user's taste profile.
       const list = await readResult(window.desktop.music.playlists({ refresh }));
       if (epoch !== requestId.current) return;
-      const collected = (list?.playlists ?? []).filter(item => item.kind === 'collected').slice(0, MAX_SEED_PLAYLISTS);
+      const allPlaylists = list?.playlists ?? [];
+      const collected = allPlaylists.filter(item => item.kind === 'collected').slice(0, MAX_SEED_PLAYLISTS);
+      const charts = allPlaylists.filter(item => item.kind === 'chart').slice(0, MAX_CHART_PLAYLISTS);
       const playlistTracks: Track[] = [];
       const playlistHits = new Map<string, number>();
       const seenInPlaylists = new Set<string>();
@@ -116,6 +125,13 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         }
         addSeeds(detail.tracks ?? [], PLAYLIST_WEIGHT);
       }
+      const chartDetails = await Promise.all(charts.map(async playlist => ({
+        playlist,
+        detail: await readResult(window.desktop.music.playlistDetail({
+          id: playlist.id, kind: 'chart', start: 0, limit: PAGE, refresh,
+        })),
+      })));
+      if (epoch !== requestId.current) return;
 
       // Play history is the weakest but freshest signal — it only feeds the profile.
       const history = await readResult(window.desktop.music.history());
@@ -124,11 +140,20 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       addSeeds(historyTracks, HISTORY_WEIGHT);
 
       const profile = buildTasteProfile(seeds);
-      const model = buildRecommendationModel(profile, { playlistHits });
+      const themeTokens = buildThemeTokens(seeds, { minCount: 2, limit: 12 });
+      const model = buildRecommendationModel(profile, {
+        playlistHits,
+        themeTokens,
+        seedArtists: profile.artists.map(entry => entry.id),
+        seedAlbums: profile.albums.map(entry => entry.id),
+      });
+      const scoreProfile = buildScoreProfile(seeds, model);
       const artistSeeds = profile.artists.slice(0, MAX_ARTIST_SEEDS);
       const albumSeeds = profile.albums.slice(0, MAX_ALBUM_SEEDS);
       setReasons(artistSeeds.slice(0, 6));
       setDimensions([
+        { id: 'score', name: `目标评分 ${Math.round(scoreProfile.target)}（±${Math.round(scoreProfile.tolerance)}）`, count: Math.round(scoreProfile.count) },
+        ...themeTokens.slice(0, 3).map(entry => ({ id: `theme:${entry.key}`, name: `主题「${entry.key}」`, count: entry.count })),
         ...profile.languages
           .filter(entry => entry.key !== 'unknown' && entry.share >= 0.05)
           .slice(0, 3)
@@ -148,13 +173,20 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         setPool([]); setSummary(''); setDimensions([]); setLoaded(true);
         return;
       }
-      if (!artistSeeds.length && !albumSeeds.length && !playlistTracks.length) {
-        setError('收藏歌曲里缺少歌手或专辑信息，暂时无法生成推荐。');
-        setPool([]); setSummary(''); setDimensions([]); setLoaded(true);
-        return;
-      }
 
-      const [artistDetails, albumDetails] = await Promise.all([
+      // Second-hop sources: artists/albums from playlists and history that are NOT already
+      // direct saves. This is what supplies songs outside the user's usual discographies.
+      // Exclude only *direct saves* here. Playlist/history artists are exactly the second
+      // hop we want; excluding the whole profile would make this source permanently empty.
+      const directlySavedArtists = favoriteTracks.flatMap(track =>
+        (track.artists ?? []).map(artist => artist.id).filter((id): id is string => !!id));
+      const second = secondHopSeeds([...playlistTracks, ...historyTracks], {
+        artistIds: directlySavedArtists,
+        albumIds: favoriteTracks.map(track => track.album?.id).filter((id): id is string => !!id),
+      });
+      const keywords = buildSearchKeywords(profile, themeTokens, { limit: MAX_SEARCH_KEYWORDS });
+
+      const [artistDetails, albumDetails, secondArtists, secondAlbums, searchPages] = await Promise.all([
         Promise.all(artistSeeds.map(async seed => ({
           seed,
           detail: await readResult(window.desktop.music.artist({ id: seed.id })),
@@ -162,6 +194,18 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         Promise.all(albumSeeds.map(async seed => ({
           seed,
           detail: await readResult(window.desktop.music.album({ id: seed.id, start: 0, limit: PAGE })),
+        }))),
+        Promise.all(second.artists.slice(0, MAX_SECOND_HOP_ARTISTS).map(async seed => ({
+          seed,
+          detail: await readResult(window.desktop.music.artist({ id: seed.id })),
+        }))),
+        Promise.all(second.albums.slice(0, MAX_SECOND_HOP_ALBUMS).map(async seed => ({
+          seed,
+          detail: await readResult(window.desktop.music.album({ id: seed.id, start: 0, limit: PAGE })),
+        }))),
+        Promise.all(keywords.map(async query => ({
+          query,
+          page: await readResult(window.desktop.music.search({ query, start: 0, limit: PAGE })),
         }))),
       ]);
       if (epoch !== requestId.current) return;
@@ -173,16 +217,30 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         ...albumDetails
           .filter(item => item.detail?.tracks?.length)
           .map(item => ({ key: `album:${item.seed.id}`, weight: item.seed.count, tracks: item.detail!.tracks })),
+        ...secondArtists
+          .filter(item => item.detail?.tracks?.length)
+          .map(item => ({ key: `second-artist:${item.seed.id}`, weight: item.seed.count * 0.6, tracks: item.detail!.tracks })),
+        ...secondAlbums
+          .filter(item => item.detail?.tracks?.length)
+          .map(item => ({ key: `second-album:${item.seed.id}`, weight: item.seed.count * 0.6, tracks: item.detail!.tracks })),
+        ...searchPages
+          .filter(item => item.page?.tracks?.length)
+          .map(item => ({ key: `search:${item.query}`, weight: 2, tracks: item.page!.tracks })),
+        ...chartDetails
+          .filter(item => item.detail?.tracks?.length)
+          .map(item => ({ key: `chart:${item.playlist.id}`, weight: 1, tracks: item.detail!.tracks })),
       ];
       const playlistCandidates = playlistTracks.filter(track => !favoriteIds.has(track.id));
       if (playlistCandidates.length) {
         groups.push({ key: 'playlist:cooccurrence', weight: playlistCandidates.length, tracks: playlistCandidates });
       }
 
-      // Score every candidate on all dimensions, then diversify per artist.
+      // Score every candidate, then rank by closeness to the target score band. Same-artist
+      // and same-album rows are demoted and capped at one per artist/album in the first pass.
       const ranked = rankCandidates(groups.flatMap(group => group.tracks), {
         limit: POOL_LIMIT,
         model,
+        scoreProfile,
         excludeIds: [...favoriteIds, ...hiddenIds],
       });
       setPool(ranked);
@@ -196,13 +254,20 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       const candidateParts = [
         artistSeeds.length ? `${artistSeeds.length} 位歌手` : '',
         albumSeeds.length ? `${albumSeeds.length} 张专辑` : '',
+        second.artists.length || second.albums.length
+          ? `${secondArtists.length + secondAlbums.length} 个二跳来源` : '',
+        keywords.length ? `${keywords.length} 组主题搜索` : '',
+        charts.length ? `${charts.length} 个榜单` : '',
         playlistCandidates.length ? `${playlistCandidates.length} 首歌单曲目` : '',
       ].filter(Boolean).join('、');
-      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中挑出 ${ranked.length} 首候选，按 ${DIMENSION_SUMMARY} 排序`);
+      const scoreText = scoreProfile.count
+        ? `目标 ${Math.round(scoreProfile.target)} 分 ±${Math.round(scoreProfile.tolerance)}`
+        : '默认评分';
+      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中挑出 ${ranked.length} 首候选，按评分相近排序（${scoreText}，同歌手/同专辑降权）`);
       setLoaded(true);
       if (!ranked.length) {
         setSummary('');
-        setError('暂时没有找到新的推荐歌曲，试试多收藏几位歌手的作品。');
+        setError('暂时没有找到新的推荐歌曲，试试多收藏几首不同风格的歌。');
       }
     } finally {
       if (epoch === requestId.current) {
@@ -229,7 +294,7 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
   const reasonById = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of pool) {
-      if (item.reasons.length) map.set(item.track.id, item.reasons.slice(0, 2).join(' · '));
+      map.set(item.track.id, [`评分 ${Math.round(item.score)}`, ...item.reasons.slice(0, 2)].join(' · '));
     }
     return map;
   }, [pool]);
@@ -245,9 +310,9 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       <span className="recommend-icon"><Sparkles size={21} /></span>
       <div className="recommend-heading">
         <h2>猜你喜欢</h2>
-        <p>{loading ? '正在分析你的收藏、歌单与最近播放…' : (summary || error || '根据你的收藏歌单，发现你可能喜欢的歌曲。')}</p>
+        <p>{loading ? '正在分析你的收藏、歌单与最近播放…' : (summary || error || '根据你的收藏歌单，发现评分相近的新歌。')}</p>
         {!!dimensions.length && !loading && <p className="recommend-dims">
-          <span>画像</span>
+          <span>评分画像</span>
           {dimensions.map(item => <span key={item.id} className="recommend-dim">{item.name}</span>)}
         </p>}
         {!!reasons.length && !loading && <p className="recommend-reasons">
