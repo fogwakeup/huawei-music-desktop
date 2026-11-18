@@ -624,6 +624,27 @@ select:focus-visible,
   font-size: var(--fs-2xs);
 }
 .recommend-chip:hover { background: var(--accent-soft); }
+/* Dimension readout: the profile the recommender actually used, in plain words. */
+.recommend-heading > p.recommend-dims {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.recommend-heading > p.recommend-dims > span:first-child {
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.recommend-dim {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-2);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
 .recommend-controls {
   flex: 0 0 auto;
   display: flex;
@@ -742,8 +763,19 @@ select:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}.track-duration { text-align: right; font-variant-numeric: tabular-nums; }
+/* "Why this song" note under the title, only rendered by pages that pass subtitleOf. */
+.track-why {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  color: var(--accent-deep);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.track-duration { text-align: right; font-variant-numeric: tabular-nums; }
 .link {
   color: inherit;
   font: inherit;

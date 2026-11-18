@@ -36,6 +36,8 @@ type TrackTableProps = {
   /** Optional page-specific delete action, e.g. "从本机历史移除". */
   onRemoveFromList?: (track: Track) => void;
   listRemoveLabel?: string;
+  /** Optional per-row note under the title, e.g. why this song was recommended. */
+  subtitleOf?: (track: Track) => string | undefined;
 };
 
 type ContextMenuItem = {
@@ -61,7 +63,7 @@ function TrackArt({ track, size = 20 }: { track: Track; size?: number }) {
   </span>;
 }
 
-export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMoreLabel = '加载更多', emptyText, onRemoveFromList, listRemoveLabel }: TrackTableProps) {
+export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMoreLabel = '加载更多', emptyText, onRemoveFromList, listRemoveLabel, subtitleOf }: TrackTableProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
 
@@ -142,6 +144,7 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
         const current = actions.currentTrackId === track.id;
         const key = `${track.id}-${index}`;
         const unavailable = !track.available;
+        const subtitle = subtitleOf?.(track);
         return <div
           key={key}
           className={`track-row ${current ? 'is-current' : ''} ${selected === key ? 'is-selected' : ''} ${unavailable ? 'is-unavailable' : ''}`}
@@ -176,6 +179,7 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
                 .reduce<ReactNode[]>((nodes, node, at) => (at === 0 ? [node] : [...nodes, ' / ', node]), [])}
               {!track.artists.length && '未知艺人'}
             </small>
+            {subtitle && <em className="track-why">{subtitle}</em>}
           </span>
           <span className="track-album">
             {track.album?.id
