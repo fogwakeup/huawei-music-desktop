@@ -6,6 +6,8 @@ import { listSystemFonts } from './system-fonts';
 import { clearLyricsCache, lyricsCacheInfo, readLyricsFile, removeLocalLyrics, writeLocalLyrics } from './lyrics-cache';
 import { parseLyrics } from '../lyrics.mjs';
 import { readBackgroundImage } from './background-image.mjs';
+import { shrinkBackgroundImageDataUrl } from './image-shrink';
+import { MAX_BACKGROUND_IMAGE_DATA_URL } from './settings.mjs';
 import { fail, ok } from '../shared/result';
 import { QUALITY_ORDER } from '../shared/qualities.mjs';
 import type { DesktopLyricsModule } from './desktop-lyrics';
@@ -179,7 +181,18 @@ export function registerIpc(
     });
     const filePath = picked.canceled ? undefined : picked.filePaths[0];
     if (!filePath) return ok(null);
-    return ok(await readBackgroundImage(filePath));
+    try {
+      const dataUrl = await readBackgroundImage(filePath);
+      // Keep the stored value under Chromium's CSS declaration limit; above it the renderer sets
+      // the property and the browser silently ignores it ("uploaded, nothing changed").
+      if (dataUrl.length <= MAX_BACKGROUND_IMAGE_DATA_URL) return ok(dataUrl);
+      const shrunk = shrinkBackgroundImageDataUrl(dataUrl, MAX_BACKGROUND_IMAGE_DATA_URL);
+      if (!shrunk) throw new Error('这张图片无法压缩到可用尺寸，请换一张尺寸小一些的图片');
+      return ok(shrunk);
+    } catch (error) {
+      // Surface the real reason (too big / unreadable) instead of a generic failure notice.
+      return fail({ kind: 'unknown', message: error instanceof Error ? error.message : '读取图片失败，请重试。', retryable: true });
+    }
   });
   // One-way listeners must be idempotent: registerIpc runs again whenever the window is
   // recreated (macOS activate), and stacked listeners would double-forward every payload.

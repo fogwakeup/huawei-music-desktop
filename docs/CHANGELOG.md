@@ -2,6 +2,32 @@
 
 每条记录对照上一个提交，列出文件级与行为级变化。进度与验收视角见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+## 2026-11-21（二）— 背景图真正的根因：Chromium CSS 2²¹ 字符上限
+
+上一条记录只修了「读取端 3 MiB / sanitize 端 4 MiB」的不一致，但那不是主因：用户清除背景后重新上传依然空白。
+
+### 根因（实测）
+
+- 在主进程里量出来的：`document.documentElement.style.setProperty('--x', 长字符串)`，**2,097,150 字符能写入，2,097,153 字符被静默丢弃**——不抛异常，属性直接不出现在计算样式里。Chromium 对单个 CSS 声明值的上限就是 2²¹ = 2,097,152。
+- 用真实 `settings.json` 复现：里面存着 2,264,851 字符的 JPEG data URL，`--bg-image` 从未出现在 `<html>` 的 inline style 中，`.app-backdrop` 计算值是 `none`。图存进去了、界面是空的。
+- 之前把非法值直接落成 `''`，所以「先清除再上传」等于把唯一能显示的机会也抹掉了，表现为怎么传都没有。
+
+### 修复
+
+- **新增 `src/main/image-shrink.ts`**：`shrinkBackgroundImageDataUrl()` 用 `nativeImage` 按 2560→1920→1600→1280→1024 逐级缩放并重编码；PNG 源在还能放得下时保留 PNG（保住透明通道），否则转 JPEG。
+- **预算下调**：`MAX_BACKGROUND_IMAGE_DATA_URL` 从 4 MiB 改为 **1,200,000** 字符（`CSS_DECLARATION_VALUE_LIMIT = 2²¹` 之下留 ~900 KB 余量）；原始文件上限放宽到 16 MiB，因为超出部分会被压缩而不是丢弃。
+- **`background-image.mjs`**：不再在读取时按 CSS 预算抛错（那会让大图直接失败），只保留原始大小上限。
+- **`ipc.ts` 选图路径**：读到超预算的图先压缩再返回；压不动时用 `fail()` 返回可读原因，而不是抛异常变成「读取图片失败，请重试」。
+- **`storage.ts`**：`loadSettings()` 启动时把旧配置里的超大图压缩并回写（老用户升级后立刻恢复显示，不用重新选图）；`updateSettings()` 写入口也兜一道。
+- **`settings.mjs`**：`sanitizeGlass` 区分三种情况——省略字段保留原图、显式 `''`/`null` 清空、非法或超限值**保留原图**（绝不因为一次失败的上传把已有背景擦掉）。
+- **`pages.tsx`**：上传失败时显示主进程返回的具体原因。
+
+### 验证
+
+- 新增 `scripts/test-electron-background.mjs`（并入 `glass` 套件）：用伪随机像素生成 >2 MiB 的 PNG data URL → 走真实 `settings:update` → 断言存下来的值低于上限、重启后 `--bg-image` 真的被设置且 `.app-backdrop` 绘制出 `url("data:image/...")`、`settings.json` < 1.5 MB；再断言显式清空仍然生效。
+- 真实配置复现：修复前 `--bg-image` 长度 0、`settings.json` 2,265,852 B；修复后 CSS 值 462,058 字符、`settings.json` 463,051 B，截图可见背景插画。
+- 单测 270/270（新增 5 项背景图/预算不变量）；Electron `glass`/`smoke`/`ui`/`taskbar`/`lyrics`/`recommend`/`favorites` 全部通过（`ui` 首轮偶发一处超时，重跑通过）。
+
 ## 2026-11-21 — 背景图替换修复、全屏让位、推荐改精准型
 
 用户反馈三处：背景图上传不替换、播控条抢占前台导致无法全屏游戏、推荐评分与口味不符（要精准型）。

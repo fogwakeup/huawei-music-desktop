@@ -62,12 +62,17 @@ const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 // A background image is stored inline in settings.json. Only small, fixed-format image data URLs
 // are accepted so a tampered settings file can never inject script or bloat the store.
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
-// Single source of truth shared with the picker (background-image.mjs): the raw-byte cap and the
-// encoded-data-URL cap must agree, otherwise a picked image can pass the picker and then be
-// silently dropped here — the user sees "uploaded but nothing changed". base64 inflates by 4/3,
-// so the data-URL cap must leave room for a full-size raw image plus the data:...;base64, prefix.
-export const MAX_BACKGROUND_IMAGE_BYTES = 3 * 1024 * 1024;
-export const MAX_BACKGROUND_IMAGE_DATA_URL = Math.ceil(MAX_BACKGROUND_IMAGE_BYTES * 4 / 3) + 256;
+// Chromium silently discards any CSS declaration value of 2^21 characters or more: the property
+// simply never appears in the computed style, so the backdrop stays blank while settings.json
+// still holds the image. Measured on this Electron build — 2,097,150 chars is accepted, 2,097,153
+// is dropped. Every stored background must therefore stay well below that ceiling.
+export const CSS_DECLARATION_VALUE_LIMIT = 2 * 1024 * 1024;
+// Budget for the encoded data URL: ~900 KB of headroom under the CSS ceiling, which also keeps
+// settings.json small (a 3 MB photo used to inline ~2.3 MB of base64 into the settings file).
+export const MAX_BACKGROUND_IMAGE_DATA_URL = 1_200_000;
+// Raw file cap before re-encoding. Anything above this is rejected with a clear message; anything
+// between the data-URL budget and this cap is downscaled by the main process (image-shrink.ts).
+export const MAX_BACKGROUND_IMAGE_BYTES = 16 * 1024 * 1024;
 
 function isSafeImageDataUrl(value) {
   return typeof value === 'string' && value.length <= MAX_BACKGROUND_IMAGE_DATA_URL && IMAGE_DATA_URL.test(value);
@@ -115,7 +120,12 @@ export function sanitizeGlass(input, fallback = DEFAULT_SETTINGS.glass) {
     borderOpacity: clampNumber(raw.borderOpacity, 0, 1, base.borderOpacity),
     shadowSize: clampNumber(raw.shadowSize, 0, 40, base.shadowSize),
     shadowOpacity: clampNumber(raw.shadowOpacity, 0, 1, base.shadowOpacity),
-    backgroundImage: isSafeImageDataUrl(raw.backgroundImage) ? raw.backgroundImage : '',
+    // Three distinct cases, because collapsing them into one is what made "upload does nothing"
+    // impossible to recover from: an omitted key keeps the stored image; an explicit '' (or null)
+    // clears it; a malformed or oversized value must NEVER wipe a working image — keep the old one.
+    backgroundImage: raw.backgroundImage === undefined ? base.backgroundImage
+      : raw.backgroundImage === '' || raw.backgroundImage === null ? ''
+        : isSafeImageDataUrl(raw.backgroundImage) ? raw.backgroundImage : base.backgroundImage,
   };
 }
 

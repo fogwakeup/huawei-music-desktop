@@ -2,7 +2,8 @@ import { app, safeStorage } from 'electron';
 import * as fs from 'node:fs/promises';
 import { clearSession, loadSession, persistenceMode as getPersistenceMode, saveSession } from './session-store.cjs';
 import { clearJson, loadJson, saveJson } from './json-store.cjs';
-import { DEFAULT_SETTINGS, sanitizeQueue, sanitizeSettings } from './settings.mjs';
+import { DEFAULT_SETTINGS, MAX_BACKGROUND_IMAGE_DATA_URL, sanitizeQueue, sanitizeSettings } from './settings.mjs';
+import { shrinkBackgroundImageDataUrl } from './image-shrink';
 import { cachedLibraryData, updateLibraryCache } from './library-cache.mjs';
 import type { AppSettings, SavedQueue } from '../shared/types';
 
@@ -32,9 +33,35 @@ export async function clearMusicSession(): Promise<void> {
   return clearSession(app.getPath('userData'), fs);
 }
 
+/**
+ * Chromium drops CSS values of 2^21 characters, so a legacy settings.json can hold a background
+ * that is stored but never painted. Squeeze anything over budget before it reaches the renderer:
+ * without this, someone upgrading from an older build would still see a blank background until
+ * they manually picked the picture again.
+ */
+function fitBackgroundImage(input: unknown): { data: unknown; changed: boolean } {
+  if (!input || typeof input !== 'object') return { data: input, changed: false };
+  const record = input as Record<string, unknown>;
+  const glass = record.glass;
+  if (!glass || typeof glass !== 'object') return { data: input, changed: false };
+  const image = (glass as Record<string, unknown>).backgroundImage;
+  if (typeof image !== 'string' || image.length <= MAX_BACKGROUND_IMAGE_DATA_URL) {
+    return { data: input, changed: false };
+  }
+  const shrunk = shrinkBackgroundImageDataUrl(image, MAX_BACKGROUND_IMAGE_DATA_URL);
+  return {
+    data: { ...record, glass: { ...(glass as Record<string, unknown>), backgroundImage: shrunk ?? '' } },
+    changed: true,
+  };
+}
+
 export async function loadSettings(): Promise<AppSettings> {
   const stored = await loadJson(app.getPath('userData'), 'settings', DEFAULT_SETTINGS, fs);
-  return sanitizeSettings(stored) as AppSettings;
+  const fitted = fitBackgroundImage(stored);
+  const settings = sanitizeSettings(fitted.data) as AppSettings;
+  // Write the smaller image back so the oversized legacy data URL stops bloating settings.json.
+  if (fitted.changed) await saveJson(app.getPath('userData'), 'settings', settings, fs).catch(() => undefined);
+  return settings;
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
@@ -72,7 +99,10 @@ export async function migrateDesktopLyricsOn(): Promise<AppSettings> {
 let settingsWrite: Promise<unknown> = Promise.resolve();
 export function updateSettings(patch: unknown): Promise<AppSettings> {
   const update = settingsWrite.catch(() => undefined).then(async () => {
-    const next = sanitizeSettings(patch, await loadSettings()) as AppSettings;
+    // Legacy or hand-edited patches may still carry an unpaintable image; fit it first so a
+    // successful save is always a background the renderer can actually show.
+    const fitted = fitBackgroundImage(patch);
+    const next = sanitizeSettings(fitted.data, await loadSettings()) as AppSettings;
     await saveSettings(next);
     return next;
   });

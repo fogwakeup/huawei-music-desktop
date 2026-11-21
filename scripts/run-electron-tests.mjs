@@ -10,7 +10,7 @@ const suites = {
   business: [['node', 'scripts/test-electron-business.mjs']],
   favorites: [['node', 'scripts/test-electron-favorites.mjs']],
   recommend: [['node', 'scripts/test-electron-recommend.mjs']],
-  glass: [['node', 'scripts/test-electron-glass.mjs']],
+  glass: [['node', 'scripts/test-electron-glass.mjs'], ['node', 'scripts/test-electron-background.mjs']],
   taskbar: [['node', 'scripts/test-electron-taskbar.mjs']],
   lyrics: [['node', 'scripts/test-electron-lyrics.mjs']],
   packaged: [['node', 'scripts/test-packaged.mjs', ...process.argv.slice(3)]],

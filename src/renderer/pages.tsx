@@ -463,7 +463,8 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
   }
   async function pickBackground() {
     const result = await window.desktop.settings.pickBackgroundImage().catch(() => null);
-    if (!result?.ok) { ctx.notice('读取图片失败，请重试。'); return; }
+    if (!result) { ctx.notice('读取图片失败，请重试。'); return; }
+    if (!result.ok) { ctx.notice(result.error.message); return; }
     if (result.data === null) return; // cancelled
     updateGlass({ backgroundImage: result.data });
     ctx.notice('背景图片已应用。');
