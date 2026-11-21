@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DIVERSITY_CAPS, SCORE_WEIGHTS, SIMILARITY,
+  ACCOMPANIMENT_TOLERANCE_SHARE, DIVERSITY_CAPS, SCORE_WEIGHTS, SIMILARITY, VERSION_HABIT_SHARE,
   batchOf, buildRecommendationModel, buildRecommendationPool, buildScoreProfile,
   buildSearchKeywords, buildTasteProfile, buildThemeTokens, detectLanguage, formatClock,
-  rankCandidates, scoreCandidate, scoreSimilarity, scoreSong, secondHopSeeds,
+  isAccompaniment, rankCandidates, scoreCandidate, scoreSimilarity, scoreSong, secondHopSeeds,
   titleTokens, versionTagsOf,
 } from '../src/renderer/recommend.mjs';
 
@@ -67,6 +67,27 @@ test('versionTagsOf only reports markers that are really in the title', () => {
   assert.deepEqual(versionTagsOf('后来 (伴奏)'), ['instrumental']);
   assert.deepEqual(versionTagsOf('夜曲'), []);
   assert.deepEqual(versionTagsOf(undefined), []);
+  // Word boundaries: a real song must not be misread as a live version.
+  assert.deepEqual(versionTagsOf('Alive'), []);
+  assert.deepEqual(versionTagsOf('Deliver Me'), []);
+  assert.deepEqual(versionTagsOf('Piano Man'), []);
+  assert.deepEqual(versionTagsOf('英雄 钢琴版'), ['instrumental']);
+});
+
+test('isAccompaniment separates accompaniment renditions from real songs', () => {
+  assert.equal(isAccompaniment({ title: '后来 (伴奏)' }), true);
+  assert.equal(isAccompaniment({ title: '夜空中最亮的星 纯音乐' }), true);
+  assert.equal(isAccompaniment({ title: 'Song (Instrumental)' }), true);
+  assert.equal(isAccompaniment({ title: 'Song (Inst.)' }), true);
+  assert.equal(isAccompaniment({ title: 'Song (Karaoke)' }), true);
+  assert.equal(isAccompaniment({ title: '英雄 钢琴版' }), true);
+  // The album title is often the only marker on karaoke releases.
+  assert.equal(isAccompaniment({ title: '夜曲', album: { id: 'L', title: '十一月的萧邦（伴奏）' } }), true);
+  assert.equal(isAccompaniment({ title: '夜曲', album: { id: 'L', title: '十一月的萧邦' } }), false);
+  assert.equal(isAccompaniment({ title: 'Piano Man' }), false);
+  assert.equal(isAccompaniment({ title: 'Alive' }), false);
+  assert.equal(isAccompaniment(null), false);
+  assert.equal(isAccompaniment('后来 (伴奏)'), false);
 });
 
 test('titleTokens and buildThemeTokens extract recurring topic words, not generic bigrams', () => {
@@ -155,6 +176,94 @@ test('scoreSong penalises versions the library never keeps', () => {
   const studio = scoreSong(track('x', [{ id: 'A1', name: '甲' }], undefined, true, { title: '录音室版二' }), model);
   const live = scoreSong(track('y', [{ id: 'A1', name: '甲' }], undefined, true, { title: '录音室版 (Live)' }), model);
   assert.ok(studio.score > live.score, 'a live-only title should score below a plain one');
+});
+
+test('an original always outranks its 伴奏 twin, even when the library keeps one 伴奏', () => {
+  // Regression for the v4 inversion: one saved 伴奏 gave every other 伴奏 version = 1.0 while a
+  // studio original only got 0.8, so the accompaniment beat the real track (81 vs 80.2).
+  assert.ok(VERSION_HABIT_SHARE > 0 && VERSION_HABIT_SHARE < 1);
+  const seeds = [
+    track('s1', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+      { title: '雨夜情歌', durationSeconds: 240 }),
+    track('s2', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+      { title: '后来 (伴奏)', durationSeconds: 250 }),
+  ];
+  const model = modelFor(seeds);
+  assert.equal(model.accompanimentAllowed, false, 'one 伴奏 in the library must not unlock 伴奏');
+  const instrumental = scoreSong(track('c1', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+    { title: '晴天 (伴奏)', durationSeconds: 245 }), model);
+  const original = scoreSong(track('c2', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+    { title: '晴天', durationSeconds: 245 }), model);
+  assert.ok(original.score > instrumental.score,
+    `original ${original.score} must beat 伴奏 ${instrumental.score}`);
+  assert.equal(original.parts.version, 1);
+  assert.ok(instrumental.parts.version <= 0.25);
+});
+
+test('rankCandidates drops accompaniment renditions by default', () => {
+  const seeds = savedSeeds();
+  const model = modelFor(seeds);
+  const scoreProfile = buildScoreProfile(seeds, model);
+  const candidates = [
+    track('inst-1', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+      { title: '雨夜情歌 (伴奏)', durationSeconds: 240 }),
+    track('inst-2', [{ id: 'A1', name: '甲' }], { id: 'L2', title: '专辑一（纯音乐）' }, true,
+      { title: '雨声情歌 纯音乐', durationSeconds: 245 }),
+    track('orig-1', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+      { title: '雨夜情歌三', durationSeconds: 242 }),
+  ];
+  const ranked = rankCandidates(candidates, { model, scoreProfile });
+  assert.deepEqual(ranked.map(item => item.track.id), ['orig-1']);
+});
+
+test('a mostly-accompaniment library keeps its accompaniment recommendations', () => {
+  assert.ok(ACCOMPANIMENT_TOLERANCE_SHARE > 0 && ACCOMPANIMENT_TOLERANCE_SHARE < 1);
+  const seeds = Array.from({ length: 4 }, (_unused, index) => track(`inst-seed-${index}`,
+    [{ id: 'A1', name: '甲' }], { id: 'L1', title: '伴奏专辑' }, true,
+    { title: `伴奏曲${index} (伴奏)`, durationSeconds: 240 }));
+  const model = modelFor(seeds);
+  assert.equal(model.accompanimentAllowed, true);
+  assert.ok(model.accompanimentShare >= ACCOMPANIMENT_TOLERANCE_SHARE);
+  const ranked = rankCandidates([
+    track('inst-c', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '伴奏专辑' }, true,
+      { title: '新伴奏曲 (伴奏)', durationSeconds: 240 }),
+  ], { model });
+  assert.deepEqual(ranked.map(item => item.track.id), ['inst-c'],
+    'an instrumental library must not be filtered down to nothing');
+});
+
+test('accompaniment stays out of the theme profile and the album affinity', () => {
+  const seeds = [
+    track('a', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+      { title: '雨夜情歌', durationSeconds: 240 }),
+    track('b', [{ id: 'A1', name: '甲' }], { id: 'L2', title: '专辑一 (伴奏)' }, true,
+      { title: '雨夜情歌 (伴奏)', durationSeconds: 240 }),
+  ];
+  const profile = buildTasteProfile(seeds);
+  assert.deepEqual(profile.albums.map(entry => entry.id), ['L1'],
+    'a 伴奏 companion album must not become an album affinity');
+  assert.equal(buildThemeTokens(seeds).some(entry => entry.key === '伴奏'), false,
+    '伴奏 must not be learned as a theme word');
+  // The version share still records it, because that share decides whether 伴奏 is tolerated.
+  assert.deepEqual(profile.versions.map(entry => [entry.key, entry.count]), [['instrumental', 1]]);
+});
+
+test('buildSearchKeywords never searches for 伴奏 and only honours habitual version words', () => {
+  const seeds = [
+    track('s1', [], undefined, true, { title: '雨夜情歌 (伴奏)' }),
+    track('s2', [], undefined, true, { title: '雨夜情歌二 (伴奏)' }),
+  ];
+  const profile = buildTasteProfile(seeds);
+  const keywords = buildSearchKeywords(profile, buildThemeTokens(seeds), { limit: 5 });
+  assert.equal(keywords.includes('伴奏'), false, `伴奏 must never be a search keyword: ${keywords.join(',')}`);
+  // A single stray version word is not a habit.
+  const oneLive = buildTasteProfile([track('s3', [], undefined, true, { title: '晴天 (Live)' })]);
+  assert.equal(buildSearchKeywords(oneLive, []).includes('Live'), false);
+  const twoLive = buildTasteProfile([
+    track('s4', [], undefined, true, { title: '晴天 (Live)' }),
+    track('s5', [], undefined, true, { title: '夜曲 (Live)' }),
+  ]);
+  assert.equal(buildSearchKeywords(twoLive, []).includes('Live'), true);
 });
 
 test('buildScoreProfile derives an acceptance floor below the saved-song minimum', () => {

@@ -3,7 +3,7 @@
 // we derive taste from the user's own library and rank catalogue candidates we can actually
 // fetch. All functions here are pure so they can be unit-tested without Electron.
 //
-// RECOMMENDATION MODEL (v4, precision-oriented)
+// RECOMMENDATION MODEL (v5, precision-oriented)
 // 1. Every track gets an explainable 0-100 "taste fit" score. The strongest signals are the
 //    ones that actually define taste: the artist and album a user keeps, then language, recurring
 //    title words, playlist co-occurrence, duration habit and version markers. Artist/album are
@@ -15,6 +15,12 @@
 // 3. Diversity is enforced by a progressive per-artist / per-album cap, NOT by penalising saved
 //    artists/albums. So a favourite artist's genuinely fitting songs can still appear (one or two
 //    per batch) without one discography taking over the list.
+// 4. Accompaniment (伴奏 / 纯音乐 / karaoke / Instrumental) is NOT a song recommendation. v4 gave
+//    it a positive version bonus: as soon as one 伴奏 sat in the library, every other 伴奏 scored
+//    version = 1.0 while a studio original only got 0.8, so 伴奏 systematically outranked the real
+//    track — and "伴奏" itself became a search keyword that pulled in a whole page of 伴奏. v5
+//    drops accompaniment candidates outright, keeps them out of the theme/album profile, and never
+//    searches for them. Only a library that is genuinely accompaniment-heavy keeps them.
 //
 // The provider exposes no genre/tag field on a track (docs/API_CONTRACT.md §5 lists every
 // field the normalizer sees), so "曲风" is approximated with the signals above. Nothing here
@@ -68,8 +74,22 @@ export const LANGUAGE_LABELS = Object.freeze({
 });
 
 export const VERSION_LABELS = Object.freeze({
-  live: '现场', remix: '混音', acoustic: '不插电', instrumental: '纯音乐/伴奏', cover: '翻唱', demo: '小样',
+  live: '现场', remix: '混音', acoustic: '不插电', instrumental: '伴奏/纯音乐', cover: '翻唱', demo: '小样',
 });
+
+/**
+ * A version form only counts as a real habit when it makes up this much of the library.
+ * Below it, a tagged candidate is clearly behind a plain studio original instead of ahead.
+ */
+export const VERSION_HABIT_SHARE = 0.25;
+
+/**
+ * Accompaniment is dropped unless the library itself is mostly accompaniment/instrumental.
+ * The bar is high on purpose: a couple of stray 伴奏 must never steer the page, and a tiny
+ * library (two songs, one of them 伴奏) must not look like an instrumental-only taste either.
+ */
+export const ACCOMPANIMENT_TOLERANCE_SHARE = 0.34;
+export const ACCOMPANIMENT_MIN_COUNT = 3;
 
 const KANA = /[\u3040-\u30ff\u31f0-\u31ff]/;
 const HANGUL = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/;
@@ -79,10 +99,12 @@ const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff]{2,}/g;
 const LATIN_WORD = /[a-z]{3,}/g;
 
 const VERSION_PATTERNS = [
-  ['live', /live|演唱会|现场/i],
+  ['live', /\blive\b|演唱会|现场/i],
   ['remix', /remix|re-mix|\bdj\b|混音/i],
   ['acoustic', /acoustic|unplugged|不插电/i],
-  ['instrumental', /instrumental|伴奏|纯音乐|piano|钢琴|guitar|吉他/i],
+  // Accompaniment markers only. Bare words like piano/guitar are NOT enough: "Piano Man" is a
+  // real song, 「钢琴版」 is not. Latin markers work in both directions here.
+  ['instrumental', /instrumental|\binst\b\.?|karaoke|off\s*vocal|backing\s*track|伴奏|纯音乐|纯伴奏|消音|无人声|无和声|(?:钢琴|吉他|小提琴|古筝|二胡|八音盒|音乐盒|口琴|手风琴|萨克斯)\s*(?:版|曲|演奏)|(?:piano|guitar|violin|music\s*box)\s*(?:version|ver\b|cover|instrumental)/i],
   ['cover', /cover|翻唱/i],
   ['demo', /\bdemo\b|小样/i],
 ];
@@ -130,6 +152,16 @@ export function versionTagsOf(title) {
   return tags;
 }
 
+/**
+ * Is this an accompaniment / instrumental rendition rather than a song? The album title counts
+ * too: platforms ship whole 「XX（伴奏）」 albums whose track titles look perfectly normal.
+ */
+export function isAccompaniment(track) {
+  if (!track || typeof track !== 'object') return false;
+  return versionTagsOf(track.title).includes('instrumental')
+    || versionTagsOf(track.album?.title).includes('instrumental');
+}
+
 /** Short content words from a title: CJK bigrams plus Latin words of 3+ letters. */
 export function titleTokens(title) {
   const text = typeof title === 'string' ? title : '';
@@ -154,6 +186,8 @@ export function buildThemeTokens(seeds, options = {}) {
   for (const entry of Array.isArray(seeds) ? seeds : []) {
     const seed = seedOf(entry);
     if (!seed) continue;
+    // An accompaniment title would otherwise teach the profile 「伴奏」 as a theme word.
+    if (isAccompaniment(seed.track)) continue;
     for (const token of titleTokens(seed.track.title)) {
       counts.set(token, (counts.get(token) ?? 0) + seed.weight);
     }
@@ -189,6 +223,7 @@ export function buildTasteProfile(seeds) {
     if (!seed) continue;
     const { track, weight } = seed;
     weightTotal += weight;
+    const accompaniment = isAccompaniment(track);
 
     for (const artist of Array.isArray(track.artists) ? track.artists : []) {
       const id = idOf(artist?.id);
@@ -199,8 +234,9 @@ export function buildTasteProfile(seeds) {
       else artists.set(id, { id, name, count: weight });
     }
 
+    // A 「XX（伴奏）」 album is a companion release, not an album the user actually chose.
     const albumId = idOf(track.album?.id);
-    if (albumId) {
+    if (albumId && !accompaniment) {
       const title = typeof track.album.title === 'string' ? track.album.title : '';
       const found = albums.get(albumId);
       if (found) { found.count += weight; if (!found.title && title) found.title = title; }
@@ -212,7 +248,11 @@ export function buildTasteProfile(seeds) {
     if (languageEntry) languageEntry.count += weight;
     else languages.set(language, { key: language, count: weight });
 
-    for (const tag of versionTagsOf(track.title)) {
+    const versionTags = versionTagsOf(track.title);
+    // The album title can be the only accompaniment marker, so fold it into the version share.
+    if (accompaniment && !versionTags.includes('instrumental')) versionTags.push('instrumental');
+
+    for (const tag of versionTags) {
       const versionEntry = versions.get(tag);
       if (versionEntry) versionEntry.count += weight;
       else versions.set(tag, { key: tag, count: weight });
@@ -278,8 +318,21 @@ export function buildRecommendationModel(profile, options = {}) {
   }
   const knownVersions = new Map();
   for (const entry of profile?.versions ?? []) {
-    if (typeof entry?.key === 'string') knownVersions.set(entry.key, Number(entry.count) || 0);
+    if (typeof entry?.key !== 'string') continue;
+    const share = Number.isFinite(entry.share)
+      ? Number(entry.share)
+      : (Number(entry.count) || 0) / Math.max(1, Number(profile?.total) || 0);
+    knownVersions.set(entry.key, Math.max(0, share));
   }
+  // Accompaniment only stays recommendable when the library itself is accompaniment-heavy.
+  const instrumentalEntry = (profile?.versions ?? [])
+    .find(entry => entry?.key === 'instrumental');
+  const accompanimentShare = Number.isFinite(instrumentalEntry?.share)
+    ? Number(instrumentalEntry.share)
+    : 0;
+  const accompanimentCount = Number(instrumentalEntry?.count) || 0;
+  const accompanimentAllowed = accompanimentShare >= ACCOMPANIMENT_TOLERANCE_SHARE
+    && accompanimentCount >= ACCOMPANIMENT_MIN_COUNT;
   // Artist/album affinity is the strongest taste signal. Normalise by the top entry so a
   // favourite artist scores 1 and a never-seen one scores 0; counts come straight from the
   // weighted profile (saved 1.0, playlist 0.7, history 0.5).
@@ -323,16 +376,23 @@ export function buildRecommendationModel(profile, options = {}) {
     themeTokens,
     seedArtists,
     seedAlbums,
+    accompanimentShare,
+    accompanimentAllowed,
     artistAffinity,
     albumAffinity,
     artistName: id => artistName.get(id) ?? '',
     playlistHitCount: id => Number(playlistHits.get(id) ?? 0),
     languageShare: key => (key === 'unknown' ? 0.25 : Number(languageShares.get(key) ?? 0)),
+    // A plain studio track is the neutral best (1). A tagged version only closes the gap when the
+    // library genuinely keeps that form; otherwise it sits clearly below an original. Nothing a
+    // tagged candidate can score beats an untagged one, which is what v4 got wrong. 伴奏 is scored
+    // at the bottom regardless of the library, unless accompaniment is tolerated at all.
     versionFit: tags => {
-      if (!tags.length) return knownVersions.size ? 0.8 : 1;
-      if (!knownVersions.size) return 0.3;
-      const good = tags.filter(tag => knownVersions.has(tag)).length;
-      return clamp01(good / tags.length);
+      if (!tags.length) return 1;
+      if (tags.includes('instrumental')) return accompanimentAllowed ? 0.9 : 0.1;
+      let share = 0;
+      for (const tag of tags) share = Math.max(share, knownVersions.get(tag) ?? 0);
+      return share >= VERSION_HABIT_SHARE ? 0.9 : 0.25;
     },
     themeFit: title => {
       if (!themeCounts.size) return { value: 0.5, top: '' };
@@ -483,7 +543,8 @@ function albumKeyOf(track) {
  * Precision ranking: highest taste-fit first. Candidates scoring below the learned floor are
  * discarded (too far from the user's taste). A progressive per-artist / per-album cap supplies
  * diversity instead of penalising saved artists, so a favourite artist's best songs still appear
- * — just not ten in a row. Without `model` the legacy unscored path is preserved.
+ * — just not ten in a row. Accompaniment renditions are removed here (before scoring) unless the
+ * library itself is accompaniment-heavy. Without `model` the legacy unscored path is preserved.
  */
 export function rankCandidates(candidates, options = {}) {
   const limit = Number.isFinite(options.limit) && options.limit > 0 ? Math.floor(options.limit) : 120;
@@ -492,6 +553,7 @@ export function rankCandidates(candidates, options = {}) {
   const floor = profile && profile.count ? profile.floor : 0;
   const excluded = new Set((Array.isArray(options.excludeIds) ? options.excludeIds : []).filter(idOf));
   const seen = new Set(excluded);
+  const allowAccompaniment = options.allowAccompaniment ?? model?.accompanimentAllowed ?? false;
   const scored = [];
 
   for (const track of Array.isArray(candidates) ? candidates : []) {
@@ -499,6 +561,8 @@ export function rankCandidates(candidates, options = {}) {
     const id = idOf(track.id);
     if (!id || seen.has(id) || track.available === false) continue;
     seen.add(id);
+    // 伴奏/纯音乐 is not a song: drop it before scoring so it can never outrank the real track.
+    if (!allowAccompaniment && isAccompaniment(track)) continue;
     const { score, parts, reasons } = model ? scoreSong(track, model) : { score: 0, parts: {}, reasons: [] };
     if (model && score < floor) continue; // precision: drop low-fit songs entirely
     scored.push({ track, score, parts, reasons, taken: false });
@@ -544,6 +608,7 @@ export function buildRecommendationPool(groups, knownIds, options = {}) {
     }
     return rankCandidates(flat, {
       limit, model: options.model, scoreProfile: options.scoreProfile, excludeIds: [...known],
+      allowAccompaniment: options.allowAccompaniment,
     }).map(item => item.track);
   }
 
@@ -599,7 +664,7 @@ export function secondHopSeeds(tracks, exclude = {}) {
       else artists.set(id, { id, name, count: 1 });
     }
     const albumId = idOf(track.album?.id);
-    if (albumId && !excludedAlbums.has(albumId)) {
+    if (albumId && !excludedAlbums.has(albumId) && !isAccompaniment(track)) {
       const found = albums.get(albumId);
       const title = typeof track.album.title === 'string' ? track.album.title : '';
       if (found) found.count += 1;
@@ -611,19 +676,26 @@ export function secondHopSeeds(tracks, exclude = {}) {
 }
 
 const VERSION_QUERY = Object.freeze({
-  live: 'Live', remix: 'Remix', acoustic: '不插电', instrumental: '伴奏', cover: '翻唱', demo: 'Demo',
+  live: 'Live', remix: 'Remix', acoustic: '不插电', cover: '翻唱', demo: 'Demo',
 });
 
 /**
  * Search terms derived from the profile: version markers the library actually keeps plus
  * the strongest recurring title words. Search results are open-catalogue songs from many
  * different artists, which is exactly the diversity the artist/album endpoints lack.
+ *
+ * 「伴奏」 is deliberately never a keyword — searching it returns a whole page of accompaniment
+ * versions, which is the fastest way to fill the recommendation list with 伴奏. Other version
+ * words only qualify as a real habit (they must occur more than once), so one stray Live track
+ * cannot turn the whole batch into live recordings.
  */
 export function buildSearchKeywords(profile, themeTokens = [], options = {}) {
+  const minimum = Number.isFinite(options.minVersionCount) ? options.minVersionCount : 2;
   const keywords = [];
   for (const entry of profile?.versions ?? []) {
+    if (entry?.key === 'instrumental') continue;
     const query = VERSION_QUERY[entry?.key];
-    if (query && entry.count >= (options.minVersionCount ?? 1)) keywords.push(query);
+    if (query && Number(entry.count) >= minimum) keywords.push(query);
   }
   for (const entry of themeTokens.slice(0, options.themeLimit ?? 3)) {
     if (typeof entry?.key === 'string' && entry.key.length >= 2) keywords.push(entry.key);

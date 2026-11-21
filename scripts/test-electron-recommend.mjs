@@ -33,6 +33,13 @@ try {
     artists: [{ id: 'artist-1', name: '本地歌手' }], album: { id: 'album-1', title: '本地专辑' }, available: true,
     durationSeconds: 245,
   }));
+  // Accompaniment renditions score like a saved artist's own track, so without the filter they
+  // would sit at the very top of the page. They must never reach the list.
+  const accompanimentCandidates = [
+    { id: 'inst-1', title: '推荐一 (伴奏)', artists: [{ id: 'artist-1', name: '本地歌手' }], album: { id: 'album-1', title: '本地专辑' }, available: true, durationSeconds: 245 },
+    { id: 'inst-2', title: '收藏情歌甲 纯音乐', artists: [{ id: 'artist-1', name: '本地歌手' }], album: { id: 'album-1', title: '本地专辑' }, available: true, durationSeconds: 240 },
+    { id: 'inst-3', title: '推荐二 (Instrumental)', artists: [{ id: 'artist-1', name: '本地歌手' }], album: { id: 'album-inst', title: '本地专辑（伴奏）' }, available: true, durationSeconds: 245 },
+  ];
   const albumCandidates = [artistCandidates[0], artistCandidates[1],
     { id: 'album-only-1', title: '专辑专属一', artists: [{ id: 'artist-2', name: '另一位' }], album: { id: 'album-1', title: '本地专辑' }, available: true, durationSeconds: 230 },
     { id: 'album-only-2', title: '专辑专属二', artists: [{ id: 'artist-2', name: '另一位' }], album: { id: 'album-1', title: '本地专辑' }, available: true, durationSeconds: 500 },
@@ -72,17 +79,17 @@ try {
     }));
     ipcMain.handle('music:artist', (_event, input) => ok({
       artist: { id: input.id, name: input.id },
-      tracks: input.id === 'artist-2' ? fixtures.second : fixtures.fromArtist,
+      tracks: [...(input.id === 'artist-2' ? fixtures.second : fixtures.fromArtist), ...fixtures.accompaniment],
       albums: [],
-    }));
-    ipcMain.handle('music:album', () => ok({
+    }));    ipcMain.handle('music:album', () => ok({
       album: { id: 'album-1', title: '本地专辑', artists: [{ name: '本地歌手' }] },
       tracks: fixtures.fromAlbum, nextStart: 50, hasMore: false,
     }));
     ipcMain.handle('music:favorite-state', () => ok({ favorite: false }));
     ipcMain.handle('music:set-favorite', (_event, input) => ok({ favorite: input.favorite }));
     ipcMain.handle('music:search', (_event, input) => ok({
-      tracks: input.query === '收藏' ? [fixtures.searchTrack] : [], nextStart: 0, hasMore: false,
+      tracks: input.query === '收藏' ? [fixtures.searchTrack, fixtures.accompaniment[0]] : [],
+      nextStart: 0, hasMore: false,
     }));
     ipcMain.handle('music:history', () => ok({ tracks: fixtures.played }));
     ipcMain.handle('music:lyrics', () => ok({ synced: false, lines: [] }));
@@ -94,10 +101,15 @@ try {
   }, {
     saved: seeds, fromArtist: artistCandidates, fromAlbum: albumCandidates, played: history,
     second: secondArtistTracks, chart: chartTracks, searchTrack,
+    accompaniment: accompanimentCandidates,
   });
 
   const rowLabels = () => page.locator('.recommend-library .track-row')
     .evaluateAll(rows => rows.map(row => row.getAttribute('aria-label')));
+  const assertNoAccompaniment = (labels, where) => {
+    const leaked = labels.filter(label => /伴奏|纯音乐|Instrumental/i.test(label ?? ''));
+    assert.deepEqual(leaked, [], `accompaniment leaked into ${where}`);
+  };
 
   await page.reload();
   await page.waitForLoadState('domcontentloaded');
@@ -119,6 +131,8 @@ try {
   assert.match(summaryText, /1 个二跳来源/);
   assert.match(summaryText, /3 组主题搜索/);
   assert.match(summaryText, /1 个榜单/);
+  // Accompaniment must be filtered out before ranking, and the page says so.
+  assert.match(summaryText, /已过滤 3 首伴奏\/纯音乐/, `accompaniment filter missing: ${summaryText}`);
 
   // The profile readout must show the score target, not only artist names.
   const dims = await page.locator('.recommend-dim').allInnerTexts();
@@ -132,6 +146,7 @@ try {
   assert.equal(firstBatch.length, 20, 'first recommendation batch should hold 20 tracks');
   assert.equal(firstBatch.some(label => label?.includes('收藏情歌')), false,
     'seed tracks leaked into recommendations');
+  assertNoAccompaniment(firstBatch, 'the first batch');
 
   // Every row shows the score that decided its position plus a readable reason.
   assert.match(await page.locator('.recommend-library .track-why').first().innerText(), /评分 \d+/);
@@ -140,6 +155,7 @@ try {
   const secondBatch = await rowLabels();
   assert.equal(secondBatch.length, 7, 'second batch should hold the remaining candidates');
   assert.equal(secondBatch.some(label => firstBatch.includes(label)), false, '换一批 repeated the same tracks');
+  assertNoAccompaniment(secondBatch, 'the second batch');
   assert.match(await page.locator('.recommend-library .hint').innerText(), /共 27 首候选/);
 
   // "重新分析" rebuilds from the same fixtures and returns to the first batch.

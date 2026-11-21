@@ -4,7 +4,7 @@ import { TrackTable } from './components';
 import {
   LANGUAGE_LABELS, VERSION_LABELS,
   batchOf, buildRecommendationModel, buildScoreProfile, buildSearchKeywords, buildTasteProfile,
-  buildThemeTokens, formatClock, rankCandidates, secondHopSeeds,
+  buildThemeTokens, formatClock, isAccompaniment, rankCandidates, secondHopSeeds,
 } from './recommend.mjs';
 import type { LibraryContext } from './pages';
 import type { Result, Track } from '../shared/types';
@@ -43,11 +43,11 @@ async function readResult<T>(action: Promise<Result<T>>): Promise<T | null> {
 
 /**
  * A local recommender page. The provider has no usable recommendation endpoint, so taste is
- * derived from what the user actually keeps. Every song is scored on language / version /
- * duration / recurring title words / playlist co-occurrence — never on artist identity — and
- * candidates are ranked by closeness to the user's target score. Same-artist and same-album
- * songs are demoted, and the pool is widened with second-hop artists/albums, profile-driven
- * search results and chart playlists so the list cannot collapse into one discography.
+ * derived from what the user actually keeps. Every song is scored on artist / album / language /
+ * version / duration / recurring title words / playlist co-occurrence, ranked by fit, and held to
+ * a learned acceptance floor. Accompaniment renditions (伴奏 / 纯音乐) are filtered out before
+ * scoring, second-hop artists/albums, profile-driven search results and chart playlists widen the
+ * pool, and a per-artist cap keeps one discography from taking over the list.
  */
 export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
   const [loading, setLoading] = useState(false);
@@ -237,7 +237,17 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
 
       // Score every candidate, then rank by closeness to the target score band. Same-artist
       // and same-album rows are demoted and capped at one per artist/album in the first pass.
-      const ranked = rankCandidates(groups.flatMap(group => group.tracks), {
+      // Accompaniment renditions are dropped before scoring (伴奏 is not a song); count the
+      // unique ones so the header can say how much noise was filtered out.
+      const candidates = groups.flatMap(group => group.tracks);
+      const accompanimentIds = new Set<string>();
+      if (!model.accompanimentAllowed) {
+        for (const track of candidates) {
+          if (!track?.id || favoriteIds.has(track.id) || hiddenIds.has(track.id)) continue;
+          if (isAccompaniment(track)) accompanimentIds.add(track.id);
+        }
+      }
+      const ranked = rankCandidates(candidates, {
         limit: POOL_LIMIT,
         model,
         scoreProfile,
@@ -263,7 +273,8 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       const scoreText = scoreProfile.count
         ? `契合线 ${Math.round(scoreProfile.floor)}+，收藏歌手/专辑优先`
         : '默认排序';
-      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中精选 ${ranked.length} 首，按口味契合度从高到低（${scoreText}，每位歌手限量避免刷屏）`);
+      const accompanimentText = accompanimentIds.size ? `，已过滤 ${accompanimentIds.size} 首伴奏/纯音乐` : '';
+      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中精选 ${ranked.length} 首，按口味契合度从高到低（${scoreText}，每位歌手限量避免刷屏）${accompanimentText}`);
       setLoaded(true);
       if (!ranked.length) {
         setSummary('');

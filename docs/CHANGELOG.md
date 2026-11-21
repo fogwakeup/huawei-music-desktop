@@ -2,6 +2,32 @@
 
 每条记录对照上一个提交，列出文件级与行为级变化。进度与验收视角见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+## 2026-11-21（三）— 推荐页整页伴奏：伴奏被当成「偏好版本」在加分
+
+用户反馈：猜你喜欢里几乎整页都是伴奏。
+
+### 根因（实测）
+
+- 用两首样本（一首原曲、一首 `后来 (伴奏)`）复现：候选《晴天 (伴奏)》**81 分**，同专辑同名原曲《晴天》**80.2 分**——伴奏比原曲还高。
+- 原因在 v4 的 `versionFit`：库里只要出现过一次伴奏，`profile.versions` 就有了 `instrumental`，于是所有伴奏的「版本类型」直接满分 1.0，而**没打标记的录音室原曲只有 0.8**。维度权重虽只有 0.04，方向却是反的：伴奏系统性压过原曲。
+- 第二个入口更直接：`buildSearchKeywords` 把画像里的版本词映射成搜索词，`instrumental → 伴奏`，于是推荐页真的去 `search('伴奏')`，一次拿回一整页伴奏。主题词提取也会从收藏的伴奏曲名里学到「伴奏」这个二字词。
+
+### 修复
+
+- **`isAccompaniment(track)`**：新增判定，标题或**专辑名**命中伴奏/纯音乐/karaoke/off vocal/instrumental/`Inst.`/`消音`/`无人声`/`钢琴版` 等即算伴奏。同时收窄版本正则：`live` 改为词边界匹配（原来的 `live` 会把 `Alive`、`Deliver Me` 误判成现场版），`piano/guitar` 不再单独当伴奏标记（`Piano Man` 是真歌，`钢琴版` 才是改编）。
+- **排名前硬过滤**：`rankCandidates` 在打分之前就把伴奏剔除，所以它再也不可能排到原曲前面；`buildRecommendationPool` 同步透传 `allowAccompaniment`。
+- **不再污染画像**：`buildThemeTokens` 跳过伴奏样本（不再学习「伴奏」主题），`buildTasteProfile` 不把「XX（伴奏）」这种陪跑专辑计入专辑亲密度，`secondHopSeeds` 不把伴奏专辑当二跳来源。
+- **搜索永不搜伴奏**：`VERSION_QUERY` 去掉 `instrumental`，`buildSearchKeywords` 显式跳过；其他版本词从「出现 1 次」提高到**出现 2 次**才算习惯，避免一首 Live 把整页变成现场版。
+- **版本维度方向修正**：无标记的录音室原曲 = 1.0，带标记的候选只有在库里该形态占比 ≥ `VERSION_HABIT_SHARE`(0.25) 时才 0.9，否则 0.25；伴奏在未放开时恒为 0.1。任何情况下带标记的候选都不会超过原曲。
+- **例外**：只有库本身以伴奏为主（占比 ≥ `ACCOMPANIMENT_TOLERANCE_SHARE` 0.34 且样本数 ≥ 3）才放开伴奏——纯音乐收藏者不会被清空推荐。
+- **界面透明**：摘要末尾追加「已过滤 N 首伴奏/纯音乐」。
+
+### 验证
+
+- `test/recommend.test.mjs` 29 → **34 项**：新增伴奏判定（含 `Piano Man`/`Alive` 反例、专辑名标记）、原曲必须压过同名单曲伴奏（v4 反转回归）、默认剔除伴奏、伴奏为主的库例外、画像/主题/专辑不吸收伴奏、搜索词不含伴奏且版本词需 ≥2 次。
+- `scripts/test-electron-recommend.mjs` 夹具加入 3 首伴奏（其中一首靠专辑名标记），断言两批列表里 `伴奏|纯音乐|Instrumental` 出现 0 次、摘要出现「已过滤 3 首伴奏/纯音乐」、候选总数仍是 27 首（说明是过滤而非替换）。
+- 单测 276/276；Electron `recommend`/`smoke`/`ui`/`favorites` 全绿。
+
 ## 2026-11-21（二）— 背景图真正的根因：Chromium CSS 2²¹ 字符上限
 
 上一条记录只修了「读取端 3 MiB / sanitize 端 4 MiB」的不一致，但那不是主因：用户清除背景后重新上传依然空白。
