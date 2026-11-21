@@ -98,6 +98,11 @@ const LATIN = /[A-Za-z]{2}/;
 const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff]{2,}/g;
 const LATIN_WORD = /[a-z]{3,}/g;
 
+// localeCompare's order depends on the host ICU data: the same profile ranked `live` above
+// `雨夜` on macOS but below it on Windows, silently changing search keywords and batches.
+// Code-unit comparison is identical everywhere, which is what a pure function needs.
+const byCodeUnit = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
 const VERSION_PATTERNS = [
   ['live', /\blive\b|演唱会|现场/i],
   ['remix', /remix|re-mix|\bdj\b|混音/i],
@@ -115,6 +120,10 @@ const THEME_STOPWORDS = new Set([
   '但是', '还是', '就是', '不是', '不要', '一直', '知道', '觉得', '时候', '现在', '只能', '真的',
   '那些', '这些', '这里', '那里', '为何', '可以', '自己', '让爱', '我和', '与你', '之间', '一次',
 ]);
+
+// Version markers are a separate scoring/search dimension (VERSION_QUERY), so letting them
+// also become theme words produces duplicate query terms like both "Live" and "live".
+const THEME_VERSION_WORDS = new Set(['live', 'remix', 'acoustic', 'cover', 'demo', 'instrumental', 'karaoke']);
 
 function seedOf(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -189,6 +198,7 @@ export function buildThemeTokens(seeds, options = {}) {
     // An accompaniment title would otherwise teach the profile 「伴奏」 as a theme word.
     if (isAccompaniment(seed.track)) continue;
     for (const token of titleTokens(seed.track.title)) {
+      if (THEME_VERSION_WORDS.has(token)) continue;
       counts.set(token, (counts.get(token) ?? 0) + seed.weight);
     }
   }
@@ -196,7 +206,7 @@ export function buildThemeTokens(seeds, options = {}) {
   const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 12;
   return [...counts.entries()]
     .filter(([, count]) => count >= minimum)
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .sort((left, right) => right[1] - left[1] || byCodeUnit(left[0], right[0]))
     .slice(0, limit)
     .map(([key, count]) => ({ key, count }));
 }
@@ -268,8 +278,8 @@ export function buildTasteProfile(seeds) {
     }
   }
 
-  const byFrequency = (left, right) => right.count - left.count || left.id.localeCompare(right.id);
-  const byFrequencyKeyed = (left, right) => right.count - left.count || left.key.localeCompare(right.key);
+  const byFrequency = (left, right) => right.count - left.count || byCodeUnit(left.id, right.id);
+  const byFrequencyKeyed = (left, right) => right.count - left.count || byCodeUnit(left.key, right.key);
   const withShare = entry => ({ ...entry, share: weightTotal > 0 ? entry.count / weightTotal : 0 });
 
   let duration = null;
@@ -569,7 +579,7 @@ export function rankCandidates(candidates, options = {}) {
   }
 
   // Plain descending fit — a 99 never hides behind a 78. Tiny tie-break keeps output stable.
-  scored.sort((left, right) => right.score - left.score || left.track.id.localeCompare(right.track.id));
+  scored.sort((left, right) => right.score - left.score || byCodeUnit(left.track.id, right.track.id));
 
   const picked = [];
   const perArtist = new Map();
@@ -621,7 +631,7 @@ export function buildRecommendationPool(groups, knownIds, options = {}) {
         track && typeof track === 'object' && idOf(track.id) && track.available !== false),
     }))
     .filter(group => group.tracks.length)
-    .sort((left, right) => right.weight - left.weight || left.key.localeCompare(right.key));
+    .sort((left, right) => right.weight - left.weight || byCodeUnit(left.key, right.key));
   const cursors = ordered.map(() => 0);
   const pool = [];
   while (pool.length < limit) {
@@ -671,7 +681,7 @@ export function secondHopSeeds(tracks, exclude = {}) {
       else albums.set(albumId, { id: albumId, title, count: 1 });
     }
   }
-  const ordered = (left, right) => right.count - left.count || left.id.localeCompare(right.id);
+  const ordered = (left, right) => right.count - left.count || byCodeUnit(left.id, right.id);
   return { artists: [...artists.values()].sort(ordered), albums: [...albums.values()].sort(ordered) };
 }
 
