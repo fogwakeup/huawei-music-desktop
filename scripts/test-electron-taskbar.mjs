@@ -1,6 +1,7 @@
-// Offline regression for the taskbar presentation of the transport bar: the window must sit on
-// the taskbar band (not above it, not under it), survive a mode switch through the real settings
-// pipeline, and snap back onto the band when something moves it.
+// Offline regression for the taskbar presentation of the transport bar: the window must dock into
+// the taskbar's *measured* free band (right-aligned to the tray with a 12 DIP margin, never over
+// the app buttons or the clock), survive a mode switch through the real settings pipeline, and be
+// pulled back into that band when something moves it.
 import electron from 'electron';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -80,6 +81,38 @@ try {
     assert.ok(geometry.bounds.height >= 24, 'bar must stay usable at small taskbar sizes');
   }
 
+  // Measure the shell's own taskbar independently (koffi, not the app's helper) and prove the
+  // strip is docked in the free band: right-aligned to the tray with a 12 DIP margin, never on
+  // the app buttons. A width of 388/248/108 is what the dock logic is allowed to pick.
+  if (process.platform === 'win32') {
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    let gapLeft = null;
+    let trayLeft = null;
+    try {
+      const koffi = require('koffi');
+      const user32 = koffi.load('user32.dll');
+      const RECT = koffi.struct('TASKBAR_TEST_RECT', { left: 'long', top: 'long', right: 'long', bottom: 'long' });
+      const FindWindowW = user32.func('void * __stdcall FindWindowW(const char16_t *c, const char16_t *t)');
+      const FindWindowExW = user32.func('void * __stdcall FindWindowExW(void *p, void *a, const char16_t *c, const char16_t *t)');
+      const GetWindowRect = user32.func('bool __stdcall GetWindowRect(void *h, _Out_ TASKBAR_TEST_RECT *r)');
+      const trayHwnd = FindWindowW('Shell_TrayWnd', null);
+      const buttonsHwnd = FindWindowExW(trayHwnd, null, 'ReBarWindow32', null);
+      const trayNotifyHwnd = FindWindowExW(trayHwnd, null, 'TrayNotifyWnd', null);
+      const buttons = {}; const trayNotify = {};
+      if (GetWindowRect(buttonsHwnd, buttons)) gapLeft = buttons.right;
+      if (GetWindowRect(trayNotifyHwnd, trayNotify)) trayLeft = trayNotify.left;
+    } catch { /* koffi unavailable: skip the measurement assertions */ }
+    if (gapLeft !== null && trayLeft !== null) {
+      const right = geometry.bounds.x + geometry.bounds.width;
+      assert.ok(right <= trayLeft, `bar right ${right} must not run under the tray cluster (${trayLeft})`);
+      assert.ok(trayLeft - right >= 8 && trayLeft - right <= 16,
+        `bar should keep the 12 DIP dock margin from the tray (got ${trayLeft - right})`);
+      assert.ok(geometry.bounds.x >= gapLeft, `bar left ${geometry.bounds.x} must stay right of the app buttons (${gapLeft})`);
+      assert.ok([388, 248, 108].includes(geometry.bounds.width), `unexpected strip width ${geometry.bounds.width}`);
+    }
+  }
+
   if (process.env.CAPTURE_DESKTOP) {
     const shot = await app.evaluate(async ({ desktopCapturer, screen }) => {
       const display = screen.getPrimaryDisplay();
@@ -97,13 +130,15 @@ try {
   }
   if (process.env.CAPTURE_BAR) await mini.screenshot({ path: process.env.CAPTURE_BAR, omitBackground: false });
 
-  // The strip is non-focusable, so its controls must still receive clicks.
+  // The strip is non-focusable, so its surface must still receive input. The docked strip carries
+  // only the five controls the reference client carries (no expand button), so the gesture is the
+  // double-click on the bar.
   await app.evaluate(({ BrowserWindow }) => {
     const main = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('index.html'));
     main?.hide();
   });
   await new Promise(resolve => setTimeout(resolve, 300));
-  await mini.click('[data-action="show-main"]');
+  await mini.dblclick('.mini-info');
   await new Promise(resolve => setTimeout(resolve, 600));
   const mainVisible = await app.evaluate(({ BrowserWindow }) => {
     const main = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('index.html'));
@@ -111,16 +146,17 @@ try {
   });
   assert.equal(mainVisible, true, 'toolbar button did not reach the app (non-focusable window lost the click)');
 
-  // Programmatic move: the strip must snap back onto the band and keep the horizontal anchor.
+  // Programmatic move: the strip is docked into a measured slot, so any outside move must be
+  // corrected back. This is what stops it from being parked over the clock/tray by a stray move.
   const before = geometry.bounds;
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('mini.html'));
     window.setBounds({ x: window.getBounds().x + 90, y: window.getBounds().y - 14, width: window.getBounds().width, height: window.getBounds().height });
   });
-  await new Promise(resolve => setTimeout(resolve, 600));
+  await new Promise(resolve => setTimeout(resolve, 700));
   const afterMove = (await geometryOf(app)).bounds;
   assert.equal(afterMove.y, before.y, 'vertical drift must snap back onto the taskbar band');
-  assert.equal(afterMove.x, before.x + 90, 'horizontal slide along the taskbar is kept');
+  assert.equal(afterMove.x, before.x, 'a move over the tray must be pulled back into the free band');
 
   // Mode switch through the real settings page: the module must rebuild in the floating layout.
   await page.getByRole('button', { name: '设置' }).click();

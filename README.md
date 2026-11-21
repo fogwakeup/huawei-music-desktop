@@ -76,11 +76,43 @@
 
 ### 11. 桌面播控条（嵌入任务栏，可拖动记忆）
 
-- 类汽水音乐的任务栏播控条：与主窗口分离的独立置顶窗口（`frame:false` + `transparent` + `skipTaskbar` + `focusable:false` + `setAlwaysOnTop('screen-saver')`），**点击不抢焦点**但按钮照常可用。
-- **贴着任务栏那条带子画**：由 `bounds` 与 `workArea` 之差推导任务栏在屏幕上/下/左/右以及厚度（自动隐藏时按 48px 兜底），条高随任务栏收缩留上下 4px 边距，默认落在托盘左侧并预留托盘宽度，不与托盘图标重叠。
-- **可沿任务栏拖动**并记忆位置（`taskbarX` 整数锚点，±32768 钳制），拖动中只允许沿任务栏轴移动；显示器分辨率/工作区变化时自动重算贴边位置。
-- 5 秒心跳重新置顶，避免被系统重绘或全屏应用盖住；关闭按钮按设置**最小化到托盘**而不是退出进程。
-- 设置 → 播放可切换「嵌入任务栏 / 悬浮胶囊」两种形态。
+对着正在运行的汽水音乐 3.5.1 逐项逆向后重做，不再是「猜一个贴近的位置置顶」。
+
+**它是怎么做到的（逆向结论）**：Windows 11 已经废掉 DeskBand，没有任何公开的任务栏扩展 API，第三方只能往任务栏上盖一个自己的窗口。汽水音乐的做法是——窗口本身 `frame:false` + `transparent` + `alwaysOnTop` + `focusable:false` + `skipTaskbar`，Windows 上初始尺寸先给 `1×1`，由原生插件量到真实空位后再 `setBounds`；**不靠置顶等级，而是把窗口 owner 交给任务栏 + 定时插到任务栏正上方**；量位置的活由 `ReBarWindow32`（按钮区）与 `TrayNotifyWnd`（托盘）两个子窗口的矩形相减得出，空位不到一档宽度就整窗渐隐，绝不压缩硬塞。
+
+本项目按这个结构实现，分三层：
+
+- **`src/main/taskbar-dock.mjs`（纯函数，可单测）**：矩形算式。宽度三档 `388 / 248 / 108` DIP，高度 `min(40, 空位高)`，垂直居中，贴边留 `12` DIP；`dockWidthDip()` 逐档降级，`388+24` 装不下就试 `248+24`、再试 `108+24`，全装不下返回 `null`（→ 隐藏）。`clampDockedX()` 把拖动/记忆位置夹回空位内。`isFullscreenForeground()` 判定「无边框全屏」，最大化窗口不算。
+- **`src/main/win32-taskbar.ts`（koffi → `user32.dll`）**：用预编译的 N-API FFI（koffi，无需编译工具链）直接调 `FindWindowW('Shell_TrayWnd')`、`FindWindowExW` 取 `ReBarWindow32` / `Start` / `TrayNotifyWnd`、`GetWindowRect` 量矩形、`IsWindowVisible` 看任务栏是否在屏、`GetForegroundWindow`+`GetWindowRect` 判全屏、`SetWindowLongPtrW` 打上 `WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE` 并摘掉 `WS_EX_APPWINDOW`、`SetWindowPos(HWND_TOPMOST, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)` 抢层。物理像素经 `screenToDipRect` 折成 DIP。**koffi 装不上（非 Windows / 加载失败）时全部导出退化为 `null`/no-op，调用方自动回落到 work-area 旧算法，不会崩。**
+- **`src/main/mini-player.ts`**：`dockedPlacement()` 把「实测空位 → 降档宽度 → 出 rect → 夹 X」串起来，无空位返回 `null` 即隐藏；`maintainStrip()` 每 **250ms** 跑一次——拖拽中只补一次 `raiseAboveTaskbar`，全屏（原生判定或回退到自算）就 `hideStrip()` 让位，否则重算 bounds + `showInactive()` + 重新抢层。
+
+**为什么之前「直接被任务栏遮挡」**：上一版把置顶从 `screen-saver` 降到 `floating`，而 Explorer 每次重绘都会把任务栏重新提回 topmost 队首，于是条子被压到下面。而且 Chromium 在「topmost 标志没变」时会**跳过** `SetWindowPos`，光调 `setAlwaysOnTop` 补不回来——所以必须由原生侧主动重插。实测 `EnumWindows` 顺序已从「条子在下」变成 `strip index=6 < taskbar index=14`。
+
+- **位置来自实测而非推算**：本机量到任务栏 `0,1392 2560×48`、按钮区右边界 `411`、托盘左边界 `2079`，空白区 `x=411 w=1668`，条子落在 `1679,1396 388×40`——距托盘恰好 12 DIP，既不压托盘图标也不盖应用按钮。
+- **可沿任务栏拖动**并记忆位置（`taskbarX` 整数锚点，±32768 钳制）；拖出空位会被 `clampDockedX` 拉回，不能盖到托盘上；分辨率/工作区变化时重算贴边位置。
+- 设置 → 播放可切换「嵌入任务栏 / 悬浮胶囊」两种形态；播控条本身可在同一处开关（关闭后从托盘菜单或设置重新打开），**双击条身**展开主窗口。
+- 单测 `test/taskbar-dock.test.mjs`（7 项）用本机实测数字断言空白区算式、三档降级、12 DIP 边距、40 DIP 居中、空位不足隐藏、`clampDockedX`、全屏判定；`scripts/test-electron-taskbar.mjs` 起真 Electron 验「不压托盘、距托盘 8~16px、在按钮区右侧、宽度 ∈ {388,248,108}」以及全屏让位与恢复。
+- 已知边界：竖排任务栏（Win11 已不支持）退化为旧算法；高 DPI 缩放的 DIP 换算未在非 100% 缩放的机器上实测。
+
+#### 11.1 外观：按实测像素 1:1 对齐
+
+逆向出来的常量和真机渲染并不完全一致，所以外观是按**屏幕上那条真的汽水音乐播控条逐像素量出来的**，不是照抄源码常量：
+
+| 元素 | 实测（388×40 内坐标） | 本项目实现 |
+|---|---|---|
+| 封面 | 28×28 @ x23，圆角 4 | 28×28，`radius 4`，x22 |
+| 文字 | 两行，块高 24，起于 x62 | 标题 12px/500、副标题 11px/400，两行 |
+| 上一首 / 下一首 | 图标 13×13，中心 216 / 317 | 32×32 按钮，图标 22px 盒 → 12×14 字形 |
+| 播放 | **药丸 48×32，圆角 12**，三角 16×18 | 48×32、`radius 12`、三角放大到 16×18 |
+| 收藏 | 心形 18×17，右端 369 | 20px 图标，右端 365 |
+| 底色 | **静止完全透明**（只有像素，没有面板） | 同：`background: transparent` |
+| hover | 圆角 8 的浅块 + 0.5px 描边 | 同上：浅色 `rgba(255,255,255,.32)`、深色 `.045` |
+| 颜色 | 图标黑 72%、文字黑 50%、药丸黑 7% | 同，且全部走 `light-dark()` |
+
+- **主题跟的是任务栏，不是 App**：任务栏用 `SystemUsesLightTheme`，和应用主题（`AppsUseLightTheme`）是两个开关，所以用 koffi 调 `advapi32!RegGetValueW` 每 1 秒读一次，变了就通过 `mini-player:theme` 推给渲染层，渲染层写 `html[data-theme]` 让全站 `light-dark()` 切换；读不到时退回系统配色。
+- **窄了就砍功能，不压缩硬塞**：388 全量 → 248 去收藏、字更小、间距收紧 → 108 只留封面 + 播放。三个档位由渲染层按窗口实际宽度切 `data-density`，主进程不需要额外通道。
+- 条上只画汽水音乐也画的那 5 个控件（封面 / 歌名 / 上一首 / 播放 / 下一首 / 收藏）。桌面歌词、展开、关闭不再挤在条上——它们留在悬浮胶囊形态和设置页里，双击条身即可展开主窗口。
+
 
 ### 12. 毛玻璃主题与背景自定义
 

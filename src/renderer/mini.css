@@ -109,69 +109,182 @@ body.dragging .mini-info { cursor: grabbing; }
 }
 
 /* ---------------------------------------------------------------------------
-   Taskbar presentation: the window is exactly the size of its taskbar slot, so
-   the pill fills it and blends with the taskbar material instead of floating.
-   Windows 11 dropped the DeskBand API, so the strip is a topmost window aligned
-   to the taskbar rectangle — visually indistinguishable from an embedded band.
+   Taskbar presentation — measured off the reference client (SodaMusic 3.5.1,
+   live on the same taskbar) rather than guessed:
+
+     element        reference footprint (388×40 slot, local coords)
+     cover          28×28 at x 23, radius 4
+     title/artist   two lines, block 24px tall, starting at x 62
+     transport      prev 32, play 48×32 (radius 12), next 32 — centres
+                    216 / 267 / 317, gaps ≈ 10
+     heart          32 at x 352..369, right inset 12
+     surface        fully transparent at rest; the widget is only pixels, no
+                    panel. On hover it grows an 8px-radius wash
+                    (rgba(255,255,255,.3) light / .04 dark) + 0.5px hairline
+     colours        icons black @ .72, text black @ .5, pill black @ .07 —
+                    all pre-multiplied against the taskbar, so every colour
+                    runs through light-dark() driven by the taskbar's own
+                    switch (`SystemUsesLightTheme`), not the app theme
+
+   Windows 11 dropped the DeskBand API, so this is a topmost window sized to the
+   taskbar's measured free band — but styled as if it were part of it.
    --------------------------------------------------------------------------- */
-body.mode-taskbar .mini-bar {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  gap: 8px;
-  padding: 0 6px 0 5px;
-  border: 1px solid rgba(0, 0, 0, 0.055);
-  border-radius: 9px;
-  background: rgba(252, 252, 253, 0.55);
-  backdrop-filter: blur(26px) saturate(150%);
-  -webkit-backdrop-filter: blur(26px) saturate(150%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 2px rgba(20, 24, 32, 0.06);
+
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+body.mode-taskbar {
+  --strip-radius: 8px;
+  --strip-hover: light-dark(rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.045));
+  --strip-border: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.07));
+  --strip-glyph: light-dark(rgba(0, 0, 0, 0.72), rgba(255, 255, 255, 0.78));
+  --strip-glyph-strong: light-dark(rgba(0, 0, 0, 0.9), rgba(255, 255, 255, 0.95));
+  --strip-title: light-dark(rgba(0, 0, 0, 0.52), rgba(255, 255, 255, 0.6));
+  --strip-artist: light-dark(rgba(0, 0, 0, 0.44), rgba(255, 255, 255, 0.46));
+  --strip-pill: light-dark(rgba(0, 0, 0, 0.085), rgba(255, 255, 255, 0.12));
+  --strip-pill-hover: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
+  --strip-wash: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1));
+  --strip-cover: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.09));
+  --strip-accent: light-dark(#c8202e, #ff6b6b);
+  color: var(--strip-glyph);
 }
+
+body.mode-taskbar .mini-bar {
+  width: calc(100% - 24px);
+  height: 100%;
+  margin: 0 12px;
+  gap: 10px;
+  /* Asymmetric on purpose: the reference's cover starts 23px in while its heart ends 19px from
+     the right edge, so the left inset is larger than the right one. */
+  padding: 0 0 0 10px;
+  border: 0.5px solid transparent;
+  border-radius: var(--strip-radius);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  transition: background-color 0.11s ease, border-color 0.11s ease;
+}
+
+/* Resting state is invisible: the band belongs to the taskbar until the user reaches for it. */
+body.mode-taskbar .mini-bar:hover {
+  background: var(--strip-hover);
+  border-color: var(--strip-border);
+}
+
+body.mode-taskbar .mini-info { gap: 10px; }
 
 body.mode-taskbar .mini-cover {
-  flex: 0 0 26px;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--strip-glyph);
+  background: var(--strip-cover);
 }
 
-body.mode-taskbar .mini-cover svg { width: 15px; height: 15px; }
+body.mode-taskbar .mini-cover svg { width: 16px; height: 16px; }
 
-/* One line, like "歌名 · 艺人", so the strip stays as short as the taskbar is tall. */
+/* Two lines, title over artist — the reference does not put them on one line, and the
+   taskbar is tall enough for both. */
 body.mode-taskbar .mini-text {
-  flex-direction: row;
-  align-items: baseline;
-  gap: 5px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
   overflow: hidden;
 }
 
-body.mode-taskbar .mini-text small::before { content: '·'; margin-right: 5px; color: #a8adb6; }
-body.mode-taskbar .mini-text strong { font-size: 12px; line-height: 1.2; flex: 0 1 auto; }
-body.mode-taskbar .mini-text small { font-size: 11px; line-height: 1.2; flex: 0 1 auto; }
+body.mode-taskbar .mini-text strong,
+body.mode-taskbar .mini-text small {
+  flex: 0 0 auto;
+  letter-spacing: 0.1px;
+}
 
-body.mode-taskbar .mini-controls { gap: 2px; }
-body.mode-taskbar .mini-controls button { width: 26px; height: 26px; border-radius: 7px; }
-body.mode-taskbar .mini-controls button svg { width: 14px; height: 14px; }
-/* Keep the transport button round: the generic button rule above is more specific. */
-body.mode-taskbar .mini-controls button.mini-play { width: 27px; height: 27px; border-radius: 50%; }
-body.mode-taskbar .mini-controls .mini-play svg { width: 12px; height: 12px; }
-body.mode-taskbar .mini-controls .mini-close { width: 22px; height: 22px; }
-body.mode-taskbar .mini-divider { height: 16px; margin: 0 1px; }
-body.mode-taskbar .mini-lyric-glyph { font-size: 11px; }
+body.mode-taskbar .mini-text strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 13px;
+  color: var(--strip-title);
+}
 
-@media (prefers-color-scheme: dark) {
-  body.mode-taskbar { color: #eef1f6; }
-  body.mode-taskbar .mini-bar {
-    border-color: rgba(255, 255, 255, 0.09);
-    background: rgba(44, 46, 52, 0.62);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
-  }
-  body.mode-taskbar .mini-text strong { color: #f3f5f9; }
-  body.mode-taskbar .mini-text small { color: #b9bfc9; }
-  body.mode-taskbar .mini-text small::before { color: #7f858f; }
-  body.mode-taskbar .mini-controls button { color: #d5d9e1; }
-  body.mode-taskbar .mini-controls button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); color: #fff; }
-  body.mode-taskbar .mini-divider { background: rgba(255, 255, 255, 0.16); }
-  body.mode-taskbar .mini-cover { background: linear-gradient(145deg, #33373f, #262a31); color: #9aa1ac; }
-  body.mode-taskbar .mini-controls .mini-close { color: #9aa1ac; }
+body.mode-taskbar .mini-text small {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 12px;
+  color: var(--strip-artist);
+}
+
+body.mode-taskbar .mini-text small::before { content: none; }
+
+body.mode-taskbar .mini-controls { gap: 10px; }
+
+body.mode-taskbar .mini-controls button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--strip-glyph);
+  background: transparent;
+}
+
+/* Icon boxes are sized so the *glyph* lands where the reference's glyph lands (prev/next 13px,
+   play 16×18, heart 18×17) — the 24-unit viewBoxes leave margins, so the box must be bigger. */
+body.mode-taskbar .mini-controls button svg { width: 22px; height: 22px; }
+body.mode-taskbar .mini-controls button:hover:not(:disabled) { background: var(--strip-wash); color: var(--strip-glyph-strong); }
+
+body.mode-taskbar .mini-controls button.mini-play {
+  width: 48px;
+  height: 32px;
+  border-radius: 12px;
+  color: var(--strip-glyph-strong);
+  background: var(--strip-pill);
+  box-shadow: none;
+}
+
+body.mode-taskbar .mini-controls button.mini-play:hover:not(:disabled) {
+  color: var(--strip-glyph-strong);
+  background: var(--strip-pill-hover);
+}
+
+body.mode-taskbar .mini-controls .mini-play svg { width: 28px; height: 28px; }
+body.mode-taskbar #mini-like svg { width: 20px; height: 20px; }
+body.mode-taskbar .mini-divider { display: none; }
+body.mode-taskbar #mini-like.on { color: var(--strip-accent); }
+
+/* The reference widget carries exactly cover + title/artist + prev/play/next + heart. Our
+   extra controls (lyrics toggle, expand, close) stay available in the floating capsule and in
+   settings, but are not drawn on the taskbar: they would push the text out of the measured
+   388px slot that the reference fills with those five elements. */
+body.mode-taskbar .mini-controls [data-action="toggle-desktop-lyrics"],
+body.mode-taskbar .mini-controls [data-action="show-main"],
+body.mode-taskbar .mini-controls [data-action="close"] { display: none; }
+
+/* --- narrow densities -----------------------------------------------------
+   The free band between the app buttons and the tray shrinks as apps open, so
+   the strip drops features instead of squeezing them: 388 (all five) →
+   248 (no heart, tighter metrics) → 108 (cover + play only). */
+
+body.mode-taskbar[data-density="compact"] .mini-controls [data-action="like"] { display: none; }
+
+body.mode-taskbar[data-density="compact"] .mini-bar { margin: 0 6px; width: calc(100% - 12px); padding: 0 8px; gap: 8px; }
+body.mode-taskbar[data-density="compact"] .mini-cover { flex: 0 0 26px; width: 26px; height: 26px; }
+body.mode-taskbar[data-density="compact"] .mini-info { gap: 8px; }
+body.mode-taskbar[data-density="compact"] .mini-text strong { font-size: 11px; line-height: 12px; }
+body.mode-taskbar[data-density="compact"] .mini-text small { font-size: 10px; line-height: 11px; }
+body.mode-taskbar[data-density="compact"] .mini-controls { gap: 6px; }
+body.mode-taskbar[data-density="compact"] .mini-controls button { width: 28px; height: 28px; }
+body.mode-taskbar[data-density="compact"] .mini-controls button svg { width: 20px; height: 20px; }
+body.mode-taskbar[data-density="compact"] .mini-controls .mini-play svg { width: 25px; height: 25px; }
+body.mode-taskbar[data-density="compact"] .mini-controls button.mini-play { width: 42px; height: 28px; border-radius: 10px; }
+
+body.mode-taskbar[data-density="nano"] .mini-text { display: none; }
+body.mode-taskbar[data-density="nano"] .mini-bar { margin: 0 4px; width: calc(100% - 8px); padding: 0 8px; gap: 8px; justify-content: center; }
+body.mode-taskbar[data-density="nano"] .mini-info { flex: 0 0 auto; }
+body.mode-taskbar[data-density="nano"] .mini-controls { gap: 8px; }
+body.mode-taskbar[data-density="nano"] .mini-controls [data-action="previous"],
+body.mode-taskbar[data-density="nano"] .mini-controls [data-action="next"] { display: none; }
+body.mode-taskbar[data-density="nano"] .mini-controls button.mini-play { width: 44px; }
+
+@media (prefers-reduced-motion: reduce) {
+  body.mode-taskbar .mini-bar { transition: none; }
 }

@@ -5,6 +5,7 @@ declare global {
   interface Window {
     desktopMiniPlayer: {
       onState(listener: (state: MiniPlayerState) => void): () => void;
+      onTheme(listener: (theme: 'light' | 'dark' | null) => void): () => void;
       command(command: MiniPlayerCommand): void;
       requestClose(): void;
       savePosition(position: { x: number; y: number }): void;
@@ -22,6 +23,30 @@ const byId = <T extends HTMLElement>(id: string): T => document.getElementById(i
 const mode = new URLSearchParams(window.location.search).get('mode') === 'float' ? 'float' : 'taskbar';
 document.body.classList.add(`mode-${mode}`);
 
+// Density follows the width the strip was actually given. The main process shrinks it 388 → 248 →
+// 108 DIP when the taskbar's free band gets narrower, and the window's own resize event is the
+// only signal the renderer needs — no extra channel, no chance of the markup disagreeing with the
+// real bounds. `nano` is the "just a cover and a play button" state, like the reference client.
+const DENSITY_BREAKPOINTS = [[340, 'normal'], [200, 'compact']] as const;
+function applyDensity(): void {
+  const width = window.innerWidth;
+  const next = DENSITY_BREAKPOINTS.find(([min]) => width >= min)?.[1] ?? 'nano';
+  if (document.body.dataset.density !== next) document.body.dataset.density = next;
+}
+window.addEventListener('resize', applyDensity);
+applyDensity();
+
+// Taskbar theme (SystemUsesLightTheme), pushed by the main process. Until it arrives the strip
+// follows the OS colour scheme through `color-scheme: light dark`.
+window.desktopMiniPlayer.onTheme(theme => {
+  if (theme) document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+});
+
+// The docked strip keeps a native tooltip away: it would pop over the taskbar on every hover. The
+// floating capsule still needs it, because there the drag handle is not self-evident.
+if (mode === 'taskbar') byId('mini-info').removeAttribute('title');
+
 const title = byId('mini-title');
 const artist = byId('mini-artist');
 const cover = byId<HTMLImageElement>('mini-cover');
@@ -31,7 +56,7 @@ const likeButton = byId('mini-like');
 const lyricsButton = byId('mini-lyrics');
 const transport = document.querySelector<HTMLDivElement>('.mini-controls')!;
 
-const PLAY_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+const PLAY_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 4.5v15L21 12z"/></svg>';
 const PAUSE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3v14H7zm7 0h3v14h-3z"/></svg>';
 
 function setIcon(button: HTMLElement, svg: string): void {
@@ -106,7 +131,13 @@ const stopDragging = (): void => {
 };
 handle.addEventListener('pointerup', stopDragging);
 handle.addEventListener('pointercancel', stopDragging);
-handle.addEventListener('dblclick', () => window.desktopMiniPlayer.command('show-main'));
+// The docked strip shows only the five controls the reference client shows, so "expand the main
+// window" is reachable by double-clicking the bar (the handler sits on the bar, which also covers
+// the title area, and skips the buttons).
+byId('mini-bar').addEventListener('dblclick', event => {
+  if ((event.target as HTMLElement).closest('button')) return;
+  window.desktopMiniPlayer.command('show-main');
+});
 transport.addEventListener('click', event => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
   const action = button?.dataset.action;

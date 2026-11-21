@@ -5,6 +5,7 @@ import type { MiniPlayerCommand, MiniPlayerState } from '../shared/types';
 // in sync with shared/channels.ts. The mini window gets state + transport commands only —
 // no auth, no music library, no settings and no generic invoke.
 const RENDER_CHANNEL = 'mini-player:render';
+const THEME_CHANNEL = 'mini-player:theme';
 const COMMAND_CHANNEL = 'mini-player:command';
 const REQUEST_CLOSE_CHANNEL = 'mini-player:request-close';
 const SAVE_POSITION_CHANNEL = 'mini-player:save-position';
@@ -17,6 +18,13 @@ const api = {
     const wrapped = (_event: Electron.IpcRendererEvent, state: MiniPlayerState) => listener(state);
     ipcRenderer.on(RENDER_CHANNEL, wrapped);
     return () => ipcRenderer.removeListener(RENDER_CHANNEL, wrapped);
+  },
+  // The taskbar theme is not the app theme: it comes from `SystemUsesLightTheme`, which only the
+  // main process can read. The strip follows it so it blends with the band it is drawn on.
+  onTheme: (listener: (theme: 'light' | 'dark' | null) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, theme: 'light' | 'dark' | null) => listener(theme);
+    ipcRenderer.on(THEME_CHANNEL, wrapped);
+    return () => ipcRenderer.removeListener(THEME_CHANNEL, wrapped);
   },
   command: (command: MiniPlayerCommand) => { ipcRenderer.send(COMMAND_CHANNEL, command); },
   requestClose: () => { ipcRenderer.send(REQUEST_CLOSE_CHANNEL); },

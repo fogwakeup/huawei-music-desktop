@@ -2,6 +2,40 @@
 
 每条记录对照上一个提交，列出文件级与行为级变化。进度与验收视角见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+## 2026-11-21（四）— 播控条 1:1 复刻：koffi 直连 Win32 + 按实测像素对齐外观
+
+用户反馈：任务栏播控条还是不对——全屏被挡、位置压住图标、直接被任务栏遮挡。要求「读取正在运行的汽水音乐的状态栏是怎么实现的」，并选定「引入 koffi，1:1 复刻」。
+
+### 逆向（对 SodaMusic 3.5.1 实机 + `app.asar/main.js.map`）
+
+- 它不是 DeskBand（Win11 已废弃该 API），就是一个 `frame:false` + `transparent` + `alwaysOnTop` + `focusable:false` + `skipTaskbar` 的置顶窗口，Windows 上初始 `1×1`，量到空位才 `setBounds`。
+- 位置来自 `ReBarWindow32`（按钮区）与 `TrayNotifyWnd`（托盘）的矩形相减；Z 序不靠置顶等级，而是**定时插到任务栏正上方**。
+- 本机实测参照条的几何：窗口 `1679,1396 388×40`、封面 28×28 @ x23、文字两行块高 24 起于 x62、图标中心 216/267/317、心形右端 369、播放药丸 **48×32 圆角 12**、静止**完全透明**（无面板）、图标黑 72% / 文字黑 50% / 药丸黑 7%。
+
+### 修复
+
+- **新增 `src/main/taskbar-dock.mjs`**（纯函数，可单测）：三档宽度 `388/248/108`、`min(40, 空位高)`、12 DIP 边距、`dockWidthDip()` 逐档降级（装不下返回 `null` → 隐藏而不是压缩硬塞）、`clampDockedX()`、`isFullscreenForeground()`（无边框全屏才算，最大化窗口不算）。
+- **新增 `src/main/win32-taskbar.ts`**（koffi，预编译 N-API，无需编译工具链）：`FindWindowW('Shell_TrayWnd')` / `FindWindowExW` / `GetWindowRect` / `IsWindowVisible` / `GetForegroundWindow` / `SetWindowLongPtrW`（打 `WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE`、摘 `WS_EX_APPWINDOW`）/ `SetWindowPos(HWND_TOPMOST, …)`，物理像素经 `screenToDipRect` 折 DIP。**非 Windows 或 koffi 加载失败时全部退化为 `null`/no-op，调用方回落到旧 work-area 算法。**
+- **`mini-player.ts`**：`dockedPlacement()` 串起「实测空位 → 降档 → rect → 夹 X」；`maintainStrip()` 每 `250ms`（原 5 秒心跳）重算 bounds + `showInactive()` + 重新抢层，全屏则 `hideStrip()` 让位。
+- **为什么之前会被任务栏盖住**：上一版把置顶从 `screen-saver` 降到 `floating`，Explorer 每次重绘都把任务栏提回 topmost 队首；而 Chromium 在 topmost 标志未变时会**跳过** `SetWindowPos`，光调 `setAlwaysOnTop` 补不回来——必须由原生侧主动重插。
+- **外观按实测像素重做**（`mini.css`）：静止全透明、hover 才浮出圆角 8 的浅块 + 0.5px 描边；标题/副标题两行（12px/500、11px/400）；播放键 48×32 圆角 12；图标盒放大到字形与参照同尺寸（播放三角 16×18）。颜色全部走 `light-dark()`，由 `SystemUsesLightTheme`（不是 App 的 `AppsUseLightTheme`）驱动，koffi 调 `advapi32!RegGetValueW` 每 1 秒读一次，变化时经新通道 `mini-player:theme` 推给渲染层。
+- **窄了砍功能**：渲染层按窗口实际宽度切 `data-density`（≥340 normal / ≥200 compact / 更窄 nano），388 全量 → 248 去收藏、收紧间距 → 108 只留封面 + 播放。
+- 条上只保留参照也有的 5 个控件；桌面歌词/展开/关闭不再挤在条上（悬浮胶囊与设置页仍可用），**双击条身**展开主窗口。
+
+### 打包：`!**/src/**` 把 koffi 自己的源码也剔掉了
+
+- 打完包实测才发现：asar 里 **0 条 `node_modules/koffi/src` 记录**——`build.files` 里的 `!**/src/**` 是通配，会把依赖包自己的 `src/` 一起删掉，而 koffi 的 `index.cjs` 正是 `require('./src/koffi/index.cjs')`。结果是**打包版 koffi 加载失败、静默回退到 work-area 旧算法**，dev 里一切正常、装完就不对。
+- 改成根相对的通配（`!src/**`、`!docs/**`、`!test/**`、`!scripts/**`），并显式 `asarUnpack` koffi 与 `@koromix`（N-API 二进制不能留在 asar 里）。
+- 校验方式：直接从**打好的 app.asar** 里 `require` koffi 并调 `FindWindowW('Shell_TrayWnd')` → `{"ok":true,"version":"3.3.8","tray":"found"}`。
+- `scripts/check-release-contents.mjs` 同步修正：排除规则现在只对 App 自己的目录生效（依赖的 `src/docs` 允许存在），新增两条回归断言「`.node` 原生模块必须还在」「`koffi/src` 必须还在」，顺手修了 Windows 反斜杠导致的路径比较失效（该脚本在 Windows 上此前必然误报）。
+
+### 验证
+
+- `test/taskbar-dock.test.mjs` **7 项**：用本机实测数字断言空白区 `x=411 w=1668`、三档降级、12 DIP 边距、40 DIP 居中、空位不足隐藏、`clampDockedX`、全屏判定。
+- `scripts/test-electron-taskbar.mjs`：用独立 koffi 测量断言「不压托盘、距托盘 8~16px、在按钮区右侧、宽度 ∈ {388,248,108}」，并验证移出空位会被拉回、模式切换、双击展开；实跑 `{"taskbarThickness":48,"geometry":{"x":1679,"y":1396,"width":388,"height":40}}`。
+- 实机对照（汽水音乐同时在跑）：把我们的条以透明 PNG 合成到干净任务栏上逐像素比对，封面 28×28、文字块 24 高、图标中心 216/267/317、药丸 48×32 圆角 12、静止背景 `rgba(0,0,0,0)`、hover `rgba(255,255,255,.32)` 全部对上；深色任务栏下同样可读。
+- 单测 283/283，`npm run typecheck`、`electron-vite build`、任务栏 Electron 回归全绿。
+
 ## 2026-11-21（三）— 推荐页整页伴奏：伴奏被当成「偏好版本」在加分
 
 用户反馈：猜你喜欢里几乎整页都是伴奏。

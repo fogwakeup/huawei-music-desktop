@@ -20,11 +20,23 @@ const staging = await mkdtemp(join(tmpdir(), 'huawei-release-'));
 const neverStaged = [
   /(^|\/)\.local(\/|$)/, /(^|\/)research(\/|$)/, /(^|\/)\.git(\/|$)/,
 ];
-// These must not survive into the shippable payload once build.files excludes apply.
-const forbiddenInPayload = [
+// Private paths must never survive into the shippable payload, from the app tree or a dependency.
+const privatePaths = [
   /(^|\/)\.local(\/|$)/, /(^|\/)research(\/|$)/, /(^|\/)\.git(\/|$)/,
+];
+// Sources, docs, tests and scripts belong to the repo, not to the app. They are excluded with
+// *root-relative* globs (`!src/**`), because a `!**/src/**` pattern also strips a dependency's own
+// sources — which silently broke koffi, whose JS glue lives in node_modules/koffi/src.
+const projectOnlyPaths = [
   /(^|\/)docs(\/|$)/, /(^|\/)test(\/|$)/, /(^|\/)scripts(\/|$)/, /(^|\/)src(\/|$)/,
 ];
+const normalizePath = file => file.replaceAll('\\', '/').replace(/^\/+/, '');
+const isDependency = file => normalizePath(file).startsWith('node_modules/');
+const isOffender = file => {
+  const normalized = normalizePath(file);
+  if (privatePaths.some(pattern => pattern.test(normalized))) return true;
+  return !isDependency(normalized) && projectOnlyPaths.some(pattern => pattern.test(normalized));
+};
 // Project sources must never ship from the repo; dependency type declarations (.d.ts under
 // node_modules) are legitimate runtime files and are allowed.
 const forbiddenSource = /\.(ts|tsx|mjs)$/;
@@ -46,8 +58,9 @@ async function walk(directory, base = directory) {
   const entries = [];
   for (const item of await readdir(directory, { withFileTypes: true })) {
     const full = join(directory, item.name);
+    // Always POSIX separators: the same list is compared against asar entries and build.files globs.
     if (item.isDirectory()) entries.push(...await walk(full, base));
-    else entries.push(relative(base, full));
+    else entries.push(relative(base, full).replaceAll('\\', '/'));
   }
   return entries;
 }
@@ -75,20 +88,32 @@ try {
     await stat(dependencyRoot);
     await cp(dependencyRoot, join(staging, 'app', 'node_modules', dependency), { recursive: true, dereference: true });
   }
+  // Platform binaries of dependencies live in optional sub-packages (koffi's N-API binding sits in
+  // @koromix/koffi-win32-x64); electron-builder ships them, so the check has to stage them too.
+  const optionalRoot = join(root, 'node_modules', '@koromix');
+  if (await stat(optionalRoot).then(() => true, () => false)) {
+    await cp(optionalRoot, join(staging, 'app', 'node_modules', '@koromix'), { recursive: true, dereference: true });
+  }
   const staged = await walk(join(staging, 'app'));
   const stagedLeaks = staged.filter(file => neverStaged.some(pattern => pattern.test(file.replaceAll('\\', '/'))));
   assert.deepEqual(stagedLeaks, [], `app payload staged private paths: ${JSON.stringify(stagedLeaks)}`);
 
-  // Apply the same negations electron-builder reads from build.files (e.g. !**/docs/**).
+  // Apply the same negations electron-builder reads from build.files (e.g. !docs/**).
   const negations = (pkg.build?.files ?? [])
     .filter(pattern => pattern.startsWith('!'))
     .map(pattern => globToRegExp(pattern.slice(1)));
   const files = staged.filter(file => !isExcluded(negations, file));
-  const leaks = files.filter(file => forbiddenInPayload.some(pattern => pattern.test(file.replaceAll('\\', '/'))));
+  const leaks = files.filter(isOffender);
   assert.deepEqual(leaks, [], `release archive leaked private paths: ${JSON.stringify(leaks)}`);
   const sources = files.filter(file => forbiddenSource.test(file)
-    && !file.replaceAll('\\', '/').startsWith('node_modules/'));
+    && !isDependency(file));
   assert.deepEqual(sources, [], `release archive leaked unpublished sources: ${JSON.stringify(sources)}`);
+  // Regression guard: the Win32 layer is a native N-API module. If a `!**/src/**`-style glob comes
+  // back, koffi ships without its JS glue and the docked strip silently degrades to the heuristic.
+  assert.ok(files.some(file => isDependency(file) && file.endsWith('.node')),
+    'release archive lost the native N-API binding (koffi)');
+  assert.ok(files.some(file => file.replaceAll('\\', '/').startsWith('node_modules/koffi/src/')),
+    'release archive lost koffi/src, which its loader needs');
   for (const required of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'package.json']) {
     assert.ok(files.includes(required), `release archive is missing ${required}`);
   }
@@ -101,8 +126,8 @@ try {
   await pruneEmptyDirs(join(staging, 'app'));
   const archive = join(staging, 'app.asar');
   await asar.createPackage(join(staging, 'app'), archive);
-  const listed = asar.listPackage(archive).map(entry => entry.replace(/^\//, ''));
-  const archivedLeaks = listed.filter(file => forbiddenInPayload.some(pattern => pattern.test(file)));
+  const listed = asar.listPackage(archive).map(normalizePath);
+  const archivedLeaks = listed.filter(isOffender);
   assert.deepEqual(archivedLeaks, [], `app.asar leaked private paths: ${JSON.stringify(archivedLeaks)}`);
   assert.ok(listed.includes('out/main/index.js'), 'app.asar is missing the main bundle');
   assert.ok(listed.includes('out/renderer/index.html'), 'app.asar is missing the renderer');

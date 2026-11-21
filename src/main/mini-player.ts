@@ -13,22 +13,24 @@ import { channels } from '../shared/channels';
 import { sanitizeMiniPlayerState } from './mini-player-payload.mjs';
 import { updateSettings } from './storage';
 import { clampRectangle, dockPosition, isFullscreenBand, taskbarBarRect, taskbarStrip } from './mini-player-layout.mjs';
+import { clampDockedX, dockWidthDip, preferredDockRect } from './taskbar-dock.mjs';
+import { adoptTaskbarWindow, raiseAboveTaskbar, readTaskbarLayout, readTaskbarTheme } from './win32-taskbar';
 import type { AppSettings, MiniPlayerSettings, MiniPlayerState, PlayerCommand } from '../shared/types';
 
 const FLOAT_SIZE = { width: 560, height: 66 };
-const TASKBAR_SIZE = { width: 420, height: 40 };
+const TASKBAR_SIZE = { width: 388, height: 40 };
 const TASKBAR_MARGIN = 4;
-// The Win11 clock/tray cluster is not measurable through any public API, so the first run keeps a
-// proportional gap from the right edge (users usually have several tray icons) and the strip can
-// be dragged anywhere along the taskbar afterwards.
+// Fallback only: used when the Win32 layer cannot answer (non-Windows, koffi missing). The real
+// placement comes from the measured blank band of the taskbar, exactly like the reference clients.
 const TASKBAR_TRAY_RESERVE_MIN = 340;
 const TASKBAR_TRAY_RESERVE_RATIO = 0.24;
 const FLOAT_GAP = 8;
-// Windows repaints the taskbar whenever it is hovered or a flyout opens, which can put Explorer
-// above a topmost window. Re-asserting the topmost flag keeps the strip visible without ever
-// activating this window (no focus stealing). The same tick checks for a full-screen foreground;
-// when one is detected the bar hides so a full-screen game is never covered.
-const TOPMOST_HEARTBEAT_MS = 1500;
+// The taskbar repaints (hover, flyouts, shell restart) and re-raises itself above anything that
+// merely asked for always-on-top once, which is how the strip ended up *behind* the taskbar.
+// Re-inserting it at the top of the top-most band costs one SetWindowPos, so it runs 4x/s; the
+// same tick measures the taskbar, hides the strip when there is no free band any more, and yields
+// to a full-screen foreground (borderless games never shrink the work area).
+const TASKBAR_TICK_MS = 250;
 const COMMANDS: PlayerCommand[] = [
   'play-pause', 'next', 'previous', 'volume-up', 'volume-down', 'mute', 'like', 'toggle-desktop-lyrics',
 ];
@@ -55,6 +57,30 @@ function taskbarRect(anchor: number | null): Rect {
     margin: TASKBAR_MARGIN,
     trayReserve,
   }) as Rect;
+}
+
+/** A docked placement plus the free band it was fitted into (null for the heuristic fallback). */
+type DockedPlacement = { rect: Rect; gap: Rect | null };
+
+/**
+ * Place the strip in the taskbar's *measured* free band: 388/248/108 DIP wide, 40 DIP tall,
+ * vertically centred, 12 DIP off the docked edge, and never on top of the app buttons or the tray.
+ * Returns null when the band cannot host even the nano strip — the caller hides instead of
+ * squeezing the bar over the icons.
+ */
+function dockedPlacement(anchor: number | null, layout: ReturnType<typeof readTaskbarLayout>): DockedPlacement | null {
+  if (!layout) return { rect: taskbarRect(anchor), gap: null };
+  if (!layout.visible || !layout.gap) return null;
+  const width = dockWidthDip(layout.gap.width);
+  if (!width) return null;
+  const docked = preferredDockRect(layout.gap, 'right', width);
+  if (!docked) return null;
+  const x = clampDockedX(layout.gap, docked.width, anchor);
+  if (x === null) return null;
+  return {
+    rect: { x, y: docked.y, width: docked.width, height: docked.height },
+    gap: layout.gap,
+  };
 }
 
 function floatRect(settings: MiniPlayerSettings): Rect {
@@ -105,27 +131,75 @@ export function createMiniPlayerModule(hooks: {
     heartbeat = undefined;
   }
 
-  // Yield to a full-screen game instead of covering it. A topmost bar at the old 'screen-saver'
-  // level sat above full-screen games and made them unplayable; hiding on a full-screen work area
-  // and restoring afterwards keeps the strip useful without ever interfering with the foreground.
-  let yieldedForFullscreen = false;
-  function refreshTopmost(): void {
+  // Yield to a full-screen game instead of covering it. A top-most strip used to sit above
+  // full-screen games and made them unplayable; now the strip hides whenever a full-screen window
+  // owns the display (measured from the real foreground window, so borderless games count too),
+  // and also hides when the taskbar has no free band left for it.
+  function hideStrip(): void {
     if (!miniWindow || miniWindow.isDestroyed()) return;
+    if (miniWindow.isVisible()) miniWindow.hide();
+  }
+
+  // Last measured free band; the move handler and drag-end snap stay inside it.
+  let lastGap: Rect | null = null;
+
+  // The taskbar's own light/dark switch, polled once a second — the strip must blend with the band
+  // it sits on, and that theme is not the app theme. Only a change is forwarded to the renderer.
+  let lastTheme: 'light' | 'dark' | null = null;
+  let lastThemeCheck = 0;
+  const THEME_CHECK_MS = 1000;
+
+  function pushTheme(force = false): void {
+    if (!miniWindow || miniWindow.isDestroyed()) return;
+    const now = Date.now();
+    if (!force && now - lastThemeCheck < THEME_CHECK_MS) return;
+    lastThemeCheck = now;
+    const theme = readTaskbarTheme();
+    if (!force && theme === lastTheme) return;
+    lastTheme = theme;
+    try { miniWindow.webContents.send(channels.miniPlayerTheme, theme); } catch { /* Window closing. */ }
+  }
+
+  /**
+   * One tick of taskbar maintenance. Runs 4x/s because the taskbar repaints and re-raises itself
+   * far more often than the old 1.5 s heartbeat; the same tick re-measures the free band (so the
+   * strip follows the taskbar when buttons come and go) and re-inserts the window at the top of
+   * the top-most band, which is what actually keeps it from being painted over.
+   */
+  function maintainStrip(): void {
+    if (!miniWindow || miniWindow.isDestroyed()) return;
+    // A renderer drag owns the position until it ends; only keep the z-order correct meanwhile.
+    if (dragOrigin) {
+      raiseAboveTaskbar(miniWindow.getNativeWindowHandle());
+      return;
+    }
     const display = primaryDisplay();
-    const fullscreen = isFullscreenBand(display.bounds, display.workArea);
     try {
-      if (fullscreen) {
-        if (miniWindow.isVisible()) { yieldedForFullscreen = true; miniWindow.hide(); }
+      const layout = readTaskbarLayout(display);
+      // The native layout also reports a full-screen foreground; the work-area fallback covers
+      // platforms where the Win32 layer is unavailable.
+      const fullscreen = layout ? layout.fullscreen : isFullscreenBand(display.bounds, display.workArea);
+      if (fullscreen) { hideStrip(); return; }
+
+      if (mode === 'float') {
+        if (!miniWindow.isVisible()) miniWindow.showInactive();
+        if (!miniWindow.isAlwaysOnTop()) miniWindow.setAlwaysOnTop(true, 'floating');
         return;
       }
-      if (yieldedForFullscreen) {
-        yieldedForFullscreen = false;
-        // 'floating' stays above the taskbar but below true screen-saver overlays, so a
-        // full-screen application that asks for topmost can cover us on its own as well.
-        miniWindow.setAlwaysOnTop(true, 'floating');
-        miniWindow.showInactive();
+
+      const placement = dockedPlacement(latest.taskbarX, layout);
+      if (!placement) { hideStrip(); return; }
+      lastGap = placement.gap;
+      const current = miniWindow.getBounds();
+      const { rect } = placement;
+      if (current.x !== rect.x || current.y !== rect.y
+        || current.width !== rect.width || current.height !== rect.height) {
+        miniWindow.setBounds(rect);
       }
-      miniWindow.setAlwaysOnTop(true, 'floating');
+      if (!miniWindow.isVisible()) miniWindow.showInactive();
+      if (!miniWindow.isAlwaysOnTop()) miniWindow.setAlwaysOnTop(true, 'floating');
+      raiseAboveTaskbar(miniWindow.getNativeWindowHandle());
+      pushTheme();
     } catch { /* Window closing. */ }
   }
 
@@ -151,7 +225,7 @@ export function createMiniPlayerModule(hooks: {
       return;
     }
     syncBounds();
-    refreshTopmost();
+    maintainStrip();
     if (pendingState) sendState(pendingState);
   }
 
@@ -160,20 +234,19 @@ export function createMiniPlayerModule(hooks: {
   function syncBounds(): void {
     // Never yank the strip while the user is dragging it (a volume change can arrive mid-drag).
     if (!miniWindow || miniWindow.isDestroyed() || dragOrigin) return;
+    if (mode === 'taskbar') { maintainStrip(); return; }
     const [px, py] = miniWindow.getPosition();
-    const target = mode === 'taskbar'
-      ? taskbarRect(latest.taskbarX)
-      : clampRectangle(px, py, primaryDisplay().workArea, FLOAT_SIZE) as Rect;
-    const rect: Rect = mode === 'taskbar' ? target : { ...target, ...FLOAT_SIZE };
-    if (rect.x !== px || rect.y !== py || miniWindow.getBounds().width !== rect.width || miniWindow.getBounds().height !== rect.height) {
-      miniWindow.setBounds(rect);
-    }
+    const target = clampRectangle(px, py, primaryDisplay().workArea, FLOAT_SIZE) as Rect;
+    if (target.x !== px || target.y !== py) miniWindow.setPosition(target.x, target.y);
   }
 
   function createWindow(settings: MiniPlayerSettings): void {
     const taskbarMode = settings.embedInTaskbar;
+    const initial = taskbarMode
+      ? (dockedPlacement(settings.taskbarX, readTaskbarLayout(primaryDisplay()))?.rect ?? taskbarRect(settings.taskbarX))
+      : floatRect(settings);
     const window = new BrowserWindow({
-      ...(taskbarMode ? taskbarRect(settings.taskbarX) : floatRect(settings)),
+      ...initial,
       frame: false,
       transparent: true,
       // A native shadow would draw a halo across the taskbar; each presentation styles its own edge.
@@ -194,9 +267,13 @@ export function createMiniPlayerModule(hooks: {
     });
     miniWindow = window;
     mode = taskbarMode ? 'taskbar' : 'float';
+    // A tool window owned by no one: no taskbar button, never activated by a click, and the
+    // Win32 layer also strips WS_EX_APPWINDOW so it cannot show up in Alt+Tab.
+    if (taskbarMode) adoptTaskbarWindow(window.getNativeWindowHandle());
     // 'floating' keeps the strip above the taskbar (even when the taskbar is always-on-top) but
-    // no longer uses the 'screen-saver' level, which sat above full-screen games and blocked play.
-    // The heartbeat hides the window entirely while a full-screen foreground is detected.
+    // 'floating' keeps the strip in the top-most band. That alone is not enough — Explorer
+    // re-raises the taskbar and paints over it — so maintainStrip() re-inserts the window at the
+    // top of that band every tick, and hides it while a full-screen app owns the display.
     window.setAlwaysOnTop(true, 'floating');
     window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
     // Identity-checked teardown: a rebuilt window must not be cleared by the old window's events.
@@ -205,15 +282,22 @@ export function createMiniPlayerModule(hooks: {
       miniWindow = null;
       mode = null;
     });
-    // Dragging: in taskbar mode the strip slides along the taskbar only, so the vertical axis is
-    // pinned continuously — 'move' fires while the native drag loop runs, 'moved' only once it
-    // settles (and not at all for programmatic moves), so both are handled.
+    // Dragging: in taskbar mode the strip slides along the taskbar only. x stays where the user
+    // dropped it (clamped into the measured free band so it can never cover the app buttons or the
+    // clock), y is pinned to the band. 'move' fires while the native drag loop runs or while the
+    // renderer streams cursor moves; 'moved' only fires for native drags.
     window.on('move', () => {
-      if (window.isDestroyed() || mode !== 'taskbar') return;
+      if (window.isDestroyed() || mode !== 'taskbar' || snapping) return;
       const [px, py] = window.getPosition();
-      const snapped = taskbarRect(px);
-      if (snapped.x !== px || snapped.y !== py) {
-        window.setBounds({ ...window.getBounds(), x: snapped.x, y: snapped.y });
+      const bounds = window.getBounds();
+      const gap = lastGap;
+      const clampedX = gap ? clampDockedX(gap, bounds.width, px) : null;
+      const targetX = clampedX ?? taskbarRect(px).x;
+      const targetY = gap
+        ? Math.round(gap.y + (gap.height - Math.min(bounds.height, gap.height)) / 2)
+        : taskbarRect(px).y;
+      if (targetX !== px || targetY !== py) {
+        window.setBounds({ ...bounds, x: targetX, y: targetY });
       }
     });
     window.on('moved', () => {
@@ -222,8 +306,16 @@ export function createMiniPlayerModule(hooks: {
       snapping = true;
       try {
         if (mode === 'taskbar') {
-          const snapped = taskbarRect(px);
-          if (snapped.x !== px || snapped.y !== py) window.setBounds(snapped);
+          const bounds = window.getBounds();
+          const gap = lastGap;
+          const clampedX = gap ? clampDockedX(gap, bounds.width, px) : null;
+          const targetX = clampedX ?? taskbarRect(px).x;
+          const targetY = gap
+            ? Math.round(gap.y + (gap.height - Math.min(bounds.height, gap.height)) / 2)
+            : taskbarRect(px).y;
+          if (targetX !== px || targetY !== py) {
+            window.setBounds({ ...bounds, x: targetX, y: targetY });
+          }
           clearTimeout(moveSaveTimer);
           moveSaveTimer = setTimeout(() => {
             if (window.isDestroyed()) return;
@@ -245,13 +337,12 @@ export function createMiniPlayerModule(hooks: {
     });
     // Display geometry changed (monitor unplug / resolution / taskbar resize or move): re-derive
     // the rectangle instead of leaving the bar hidden off-screen or floating off the taskbar.
-    const onDisplayChange = () => { syncBounds(); refreshTopmost(); };
+    const onDisplayChange = () => { syncBounds(); maintainStrip(); };
     screen.on('display-added', onDisplayChange);
     screen.on('display-removed', onDisplayChange);
     screen.on('display-metrics-changed', onDisplayChange);
-    // The taskbar is repainted (hover, flyouts, shell restart): stay above it.
     stopHeartbeat();
-    heartbeat = setInterval(refreshTopmost, TOPMOST_HEARTBEAT_MS);
+    heartbeat = setInterval(maintainStrip, TASKBAR_TICK_MS);
     window.once('closed', () => {
       screen.removeListener('display-added', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);
@@ -261,6 +352,8 @@ export function createMiniPlayerModule(hooks: {
     void window.loadFile(join(__dirname, '../renderer/mini.html'), { query: { mode } }).then(() => {
       if (window.isDestroyed()) return;
       window.showInactive();
+      maintainStrip();
+      pushTheme(true);
       if (pendingState) {
         window.webContents.send(channels.miniPlayerRender, pendingState);
         pendingState = null;
@@ -310,9 +403,19 @@ export function createMiniPlayerModule(hooks: {
     if (!isMiniSender(event) || !miniWindow || miniWindow.isDestroyed()) return;
     const [x, y] = miniWindow.getPosition();
     if (mode === 'taskbar') {
-      const snapped = taskbarRect(x);
-      miniWindow.setBounds(snapped);
-      writeSettings({ taskbarX: snapped.x });
+      // Snap into the measured free band: never over the app buttons, never over the clock/tray.
+      const bounds = miniWindow.getBounds();
+      const gap = lastGap;
+      const snappedX = gap ? clampDockedX(gap, bounds.width, x) : null;
+      const target = snappedX === null
+        ? taskbarRect(x)
+        : {
+          ...bounds,
+          x: snappedX,
+          y: Math.round(gap!.y + (gap!.height - Math.min(bounds.height, gap!.height)) / 2),
+        };
+      miniWindow.setBounds(target);
+      writeSettings({ taskbarX: miniWindow.getPosition()[0] });
     } else {
       const safe = clampRectangle(x, y, primaryDisplay().workArea, FLOAT_SIZE);
       miniWindow.setPosition(safe.x, safe.y);

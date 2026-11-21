@@ -42,6 +42,7 @@ export const channels = {
   playerCommand: 'player:command',
   miniPlayerUpdate: 'mini-player:update',
   miniPlayerRender: 'mini-player:render',
+  miniPlayerTheme: 'mini-player:theme',
   miniPlayerCommand: 'mini-player:command',
   miniPlayerRequestClose: 'mini-player:request-close',
   miniPlayerSavePosition: 'mini-player:save-position',

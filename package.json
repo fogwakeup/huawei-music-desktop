@@ -1,6 +1,6 @@
 {
   "name": "huawei-music-desktop",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -63,6 +63,10 @@
     "appId": "org.hwmusicdesktop.unofficial.internal",
     "productName": "华为音乐",
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/koffi/**",
+      "**/node_modules/@koromix/**"
+    ],
     "npmRebuild": false,
     "publish": null,
     "artifactName": "${name}-${version}-${os}-${arch}-internal.${ext}",
@@ -72,16 +76,16 @@
     "files": [
       "out/**/*",
       "package.json",
-      "!**/.local/**",
-      "!**/research/**",
-      "!**/docs/**",
-      "!**/test/**",
-      "!**/scripts/**",
-      "!**/src/**",
-      "!**/AGENTS.md",
-      "!**/README.md",
-      "!**/tsconfig.json",
-      "!**/electron.vite.config.ts"
+      "!.local/**",
+      "!research/**",
+      "!docs/**",
+      "!test/**",
+      "!scripts/**",
+      "!src/**",
+      "!AGENTS.md",
+      "!README.md",
+      "!tsconfig.json",
+      "!electron.vite.config.ts"
     ],
     "win": {
       "target": [
@@ -131,6 +135,7 @@
     }
   },
   "dependencies": {
+    "koffi": "^3.3.8",
     "undici": "7.30.0"
   }
 }
