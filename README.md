@@ -14,7 +14,7 @@
 
 ### 1. 品牌与外观
 
-- **应用名称**改为「华为音乐」（原「华为音乐第三方客户端（学习版）」）：窗口标题、任务栏、托盘提示、安装目录内 exe 名统一（`src/shared/app-name.mjs`、`package.json` productName、`src/renderer/index.html`）。`package.json` 的 `name` 字段保持不变，避免挪动 userData 路径丢失旧数据。
+- **应用名称**「华为音乐第三方客户端（学习版）」）：窗口标题、任务栏、托盘提示、安装目录内 exe 名统一（`src/shared/app-name.mjs`、`package.json` productName、`src/renderer/index.html`）。`package.json` 的 `name` 字段保持不变，避免挪动 userData 路径丢失旧数据。
 - **应用/托盘图标**替换为自定义设计（白底圆角方形 + 洋红/青/蓝三层叠加椭圆 + 白色音符）。图标由 `scripts/make-icon-sharp.mjs` 用 sharp 渲染 SVG 生成；音符 glyph 来自 Lucide（ISC），归属声明保留在 `build/icon.LICENSE.txt`。图标图片为手动调整版。
 
 ### 2. 无版权歌曲（新增）
