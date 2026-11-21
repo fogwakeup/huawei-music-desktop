@@ -13,16 +13,18 @@ export const SHORTCUT_ACTION_LABELS = {
   like: '收藏当前歌曲',
 };
 
-// Default bindings follow the common Ctrl+Alt+ scheme used by desktop music players,
-// so every global shortcut needs a real modifier and stays out of plain typing's way.
+// 'CommandOrControl' resolves to Command on macOS and Control on Windows/Linux, so one set of
+// defaults follows each platform's convention: Ctrl+Alt on Windows, Command+Option on a Mac.
+// Every binding keeps a real modifier and stays out of plain typing's way.
+const DEFAULT_MODIFIERS = 'CommandOrControl+Alt';
 export const DEFAULT_SHORTCUTS = Object.freeze({
-  'play-pause': 'Control+Alt+P',
-  next: 'Control+Alt+Right',
-  previous: 'Control+Alt+Left',
-  'volume-up': 'Control+Alt+Up',
-  'volume-down': 'Control+Alt+Down',
-  mute: 'Control+Alt+M',
-  like: 'Control+Alt+L',
+  'play-pause': `${DEFAULT_MODIFIERS}+P`,
+  next: `${DEFAULT_MODIFIERS}+Right`,
+  previous: `${DEFAULT_MODIFIERS}+Left`,
+  'volume-up': `${DEFAULT_MODIFIERS}+Up`,
+  'volume-down': `${DEFAULT_MODIFIERS}+Down`,
+  mute: `${DEFAULT_MODIFIERS}+M`,
+  like: `${DEFAULT_MODIFIERS}+L`,
 });
 
 // Modifier keys Electron accepts; Shift alone is deliberately not enough for a global binding.

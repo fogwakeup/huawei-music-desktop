@@ -23,10 +23,10 @@ test('sanitize keeps known actions, drops junk and resolves duplicates', () => {
     bogus: 'Control+Alt+B', like: 42,
   });
   assert.equal(cleaned['play-pause'], 'Control+Alt+9');
-  assert.equal(cleaned.next, 'Control+Alt+Right', 'invalid input falls back to default');
+  assert.equal(cleaned.next, DEFAULT_SHORTCUTS.next, 'invalid input falls back to default');
   assert.equal(cleaned.previous, '', 'empty string explicitly disables');
   assert.equal(cleaned.mute, 'Alt+F4');
-  assert.equal(cleaned.like, 'Control+Alt+L', 'non-string input falls back to default');
+  assert.equal(cleaned.like, DEFAULT_SHORTCUTS.like, 'non-string input falls back to default');
   assert.equal('bogus' in cleaned, false, 'unknown actions never enter the map');
 });
 

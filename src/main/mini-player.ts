@@ -102,7 +102,10 @@ export function createMiniPlayerModule(hooks: {
   onShowMain(): void;
 }): MiniPlayerModule {
   let miniWindow: BrowserWindow | null = null;
-  let latest: MiniPlayerSettings = { enabled: true, position: null, embedInTaskbar: true, taskbarX: null };
+  let latest: MiniPlayerSettings = {
+    enabled: true, position: null,
+    embedInTaskbar: process.platform !== 'darwin', taskbarX: null,
+  };
   let mode: Mode | null = null;
   let pendingState: MiniPlayerState | null = null;
   let moveSaveTimer: NodeJS.Timeout | undefined;

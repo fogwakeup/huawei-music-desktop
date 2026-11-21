@@ -30,12 +30,13 @@ test('mini player state never forwards unsafe URLs or oversized text', () => {
 
 test('mini player settings sanitize the on/off flag, saved position and taskbar anchor', () => {
   assert.deepEqual(sanitizeMiniPlayer(null),
-    { enabled: true, position: null, embedInTaskbar: true, taskbarX: null });
+    { enabled: true, position: null, embedInTaskbar: process.platform !== 'darwin', taskbarX: null });
   assert.deepEqual(sanitizeMiniPlayer({ enabled: false, position: { x: 12, y: 40 } }),
-    { enabled: false, position: { x: 12, y: 40 }, embedInTaskbar: true, taskbarX: null });
+    { enabled: false, position: { x: 12, y: 40 }, embedInTaskbar: process.platform !== 'darwin', taskbarX: null });
   assert.equal(sanitizeMiniPlayer({ position: { x: 1.5, y: 40 } }).position, null, 'fractional coords rejected');
   assert.equal(sanitizeMiniPlayer({ position: { x: 999999, y: 0 } }).position, null, 'off-screen coords rejected');
-  assert.equal(sanitizeMiniPlayer({ embedInTaskbar: 'yes' }).embedInTaskbar, true, 'non-boolean mode ignored');
+  assert.equal(sanitizeMiniPlayer({ embedInTaskbar: 'yes' }).embedInTaskbar,
+    process.platform !== 'darwin', 'non-boolean mode ignored');
   assert.equal(sanitizeMiniPlayer({ embedInTaskbar: false }).embedInTaskbar, false);
   assert.equal(sanitizeMiniPlayer({ taskbarX: 999999 }).taskbarX, null, 'wild taskbar anchor rejected');
   assert.equal(sanitizeMiniPlayer({ taskbarX: 1500 }).taskbarX, 1500);
@@ -43,9 +44,10 @@ test('mini player settings sanitize the on/off flag, saved position and taskbar 
 
 test('settings default enables the desktop mini bar and tray close behaviour', () => {
   const next = sanitizeSettings({ miniPlayer: { enabled: false, position: { x: 5, y: 6 } } });
-  assert.deepEqual(next.miniPlayer, { enabled: false, position: { x: 5, y: 6 }, embedInTaskbar: true, taskbarX: null });
+  assert.deepEqual(next.miniPlayer,
+    { enabled: false, position: { x: 5, y: 6 }, embedInTaskbar: process.platform !== 'darwin', taskbarX: null });
   assert.deepEqual(sanitizeSettings({ volume: 0.4 }).miniPlayer,
-    { enabled: true, position: null, embedInTaskbar: true, taskbarX: null });
+    { enabled: true, position: null, embedInTaskbar: process.platform !== 'darwin', taskbarX: null });
   assert.equal(sanitizeSettings(null).closeBehavior, 'tray');
 });
 

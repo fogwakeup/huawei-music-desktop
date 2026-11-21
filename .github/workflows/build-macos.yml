@@ -1,0 +1,58 @@
+name: macOS build
+
+# mac installers must be assembled on a Mac: dmg needs hdiutil and the .app bundle layout.
+# Releases stay unpublished until this workflow attaches the dmg files to the existing tag.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: v0.0.8
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package macOS dmg (${{ matrix.arch }})
+        run: node scripts/build-desktop.mjs mac ${{ matrix.arch }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: huawei-music-macos-${{ matrix.arch }}
+          path: release/mac-${{ matrix.arch }}/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach dmg to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: release/mac-${{ matrix.arch }}/*.dmg
+          overwrite_files: true
+          fail_on_unmatched_files: true

@@ -32,26 +32,19 @@ export const DEFAULT_SETTINGS = Object.freeze({
     shadowOpacity: 0.15,
     backgroundImage: '',
   }),
-  shortcuts: Object.freeze({
-    'play-pause': 'Control+Alt+P',
-    next: 'Control+Alt+Right',
-    previous: 'Control+Alt+Left',
-    'volume-up': 'Control+Alt+Up',
-    'volume-down': 'Control+Alt+Down',
-    mute: 'Control+Alt+M',
-    like: 'Control+Alt+L',
-  }),
+  shortcuts: Object.freeze({ ...DEFAULT_SHORTCUTS }),
   // Bare text by default: the old always-on dark plate read as a black box over the desktop.
   desktopLyrics: Object.freeze({
     enabled: true, locked: false, position: null,
     fontColor: '#ffffff', showBackground: false, backgroundOpacity: 0.55,
     fontSize: 34, width: 760,
   }),
-  miniPlayer: Object.freeze({ enabled: true, position: null, embedInTaskbar: true, taskbarX: null }),
+  // macOS has no Windows taskbar to dock into, so the capsule is the sane default there.
+  miniPlayer: Object.freeze({ enabled: true, position: null, embedInTaskbar: process.platform !== 'darwin', taskbarX: null }),
 });
 
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
-import { sanitizeShortcuts } from '../shared/shortcuts.mjs';
+import { DEFAULT_SHORTCUTS, sanitizeShortcuts } from '../shared/shortcuts.mjs';
 import { QUALITY_ORDER } from '../shared/qualities.mjs';
 const CLOSE_BEHAVIORS = new Set(['quit', 'tray']);
 const QUALITIES = new Set(QUALITY_ORDER);
