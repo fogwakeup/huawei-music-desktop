@@ -10,7 +10,7 @@
 
 ## 本 fork 新增与修改的内容
 
-以下改动由 AI 编程助手编写实现（本人提需求、定方案、做本机验收），均已通过 typecheck、205 项离线单测（`npm test`）、`test:electron` smoke、`test:electron-ui` 与 `test:electron-business` 回归（Windows 本机）；逐轮证据见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)，按提交对照的变更清单见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+以下改动均已通过 typecheck、205 项离线单测（`npm test`）、`test:electron` smoke、`test:electron-ui` 与 `test:electron-business` 回归（Windows 本机）；逐轮证据见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)，按提交对照的变更清单见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
 ### 1. 品牌与外观
 
