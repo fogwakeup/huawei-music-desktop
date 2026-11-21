@@ -2,6 +2,21 @@
 
 每条记录对照上一个提交，列出文件级与行为级变化。进度与验收视角见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+## 2026-11-21 — 背景图替换修复、全屏让位、推荐改精准型
+
+用户反馈三处：背景图上传不替换、播控条抢占前台导致无法全屏游戏、推荐评分与口味不符（要精准型）。
+
+### 行为变化
+
+- **背景图替换**（`background-image.mjs` / `settings.mjs`）：读取端原图上限 3 MiB，base64 后约 4 MiB，恰好撞上 sanitize 端 4 MiB 上限而被静默丢弃。两处改为共享常量 `MAX_BACKGROUND_IMAGE_BYTES` / `MAX_BACKGROUND_IMAGE_DATA_URL`，读取端新增按编码后长度自检，picker 接受的图保证能通过 sanitize。
+- **全屏让位**（`mini-player.ts` / `mini-player-layout.mjs` / `desktop-lyrics.ts`）：置顶级别 `screen-saver` → `floating`（不再凌驾于全屏游戏之上）；新增纯函数 `isFullscreenBand()`，心跳（1.5s）检测到全屏工作区时隐藏播控条、退出后恢复；桌面歌词窗同样降为 `floating`。
+- **推荐改精准型**（`recommend.mjs`）：歌手/专辑重回评分且为最高权重（.34/.12）；排序从 `|score-target|` 改为**降序**（修正「99 分被 78 分盖过」的逻辑错误）；新增收藏样本推导的契合线 `floor`，低于它直接过滤；多样性靠每歌手/每专辑配额（1→2→3→不限）而非负分；界面文案改「口味契合线 / 按口味契合度从高到低」。
+
+### 测试
+
+- 背景图新增「满额图必经 sanitize」回归；播控条新增 `isFullscreenBand` 用例；推荐 28 项单测覆盖契合线、降序、低契合过滤、歌手专辑加分。
+- 验证：typecheck、离线单测 **268/268**、Electron glass / taskbar / lyrics / recommend 全绿。
+
 ## 2026-11-18（二）— 推荐改为「歌曲评分 + 相似评分匹配」
 
 主题：用户反馈上一版仍困在同歌手/同专辑循环。评分从「候选对画像的亲和度」改成「歌曲自身的内容分」，歌手/专辑身份从最大加分项变成减分项，同时打开三路新候选源。

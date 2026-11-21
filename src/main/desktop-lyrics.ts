@@ -159,7 +159,9 @@ export function createDesktopLyricsModule(options: DesktopLyricsModuleOptions = 
       },
     });
     lyricsWindow = window;
-    window.setAlwaysOnTop(true, 'screen-saver');
+    // 'floating' keeps lyrics above normal windows without using the 'screen-saver' level that
+    // sits above full-screen games.
+    window.setAlwaysOnTop(true, 'floating');
     window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
     window.setIgnoreMouseEvents(latest.locked, { forward: true });
     window.once('closed', () => { if (lyricsWindow === window) lyricsWindow = null; });

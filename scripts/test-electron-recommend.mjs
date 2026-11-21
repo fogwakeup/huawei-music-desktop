@@ -114,7 +114,7 @@ try {
   }, null, { timeout: 15_000 });
   const summaryText = await page.locator('.recommend-heading > p').first().innerText();
   assert.match(summaryText, /基于 2 首收藏歌曲、1 个收藏歌单、1 条最近播放/);
-  assert.match(summaryText, /按评分相近排序（目标 \d+ 分 ±\d+，同歌手\/同专辑降权）/);
+  assert.match(summaryText, /按口味契合度从高到低（契合线 \d+\+，收藏歌手\/专辑优先，每位歌手限量避免刷屏）/);
   // Every widening source must have contributed, otherwise we are still in the old bubble.
   assert.match(summaryText, /1 个二跳来源/);
   assert.match(summaryText, /3 组主题搜索/);
@@ -122,7 +122,7 @@ try {
 
   // The profile readout must show the score target, not only artist names.
   const dims = await page.locator('.recommend-dim').allInnerTexts();
-  assert.ok(dims.some(text => /目标评分 \d+/.test(text)), `score target missing: ${dims.join(' | ')}`);
+  assert.ok(dims.some(text => /口味契合线 \d+\+/.test(text)), `fit floor missing: ${dims.join(' | ')}`);
   assert.ok(dims.some(text => /主题「收藏」|主题「情歌」/.test(text)), `theme token missing: ${dims.join(' | ')}`);
   assert.ok(dims.some(text => /华语 100%/.test(text)), `language dimension missing: ${dims.join(' | ')}`);
   assert.ok(dims.some(text => /平均时长/.test(text)), `duration dimension missing: ${dims.join(' | ')}`);
@@ -138,9 +138,9 @@ try {
 
   await page.getByRole('button', { name: '换一批' }).click();
   const secondBatch = await rowLabels();
-  assert.equal(secondBatch.length, 12, 'second batch should hold the remaining candidates');
+  assert.equal(secondBatch.length, 7, 'second batch should hold the remaining candidates');
   assert.equal(secondBatch.some(label => firstBatch.includes(label)), false, '换一批 repeated the same tracks');
-  assert.match(await page.locator('.recommend-library .hint').innerText(), /共 32 首候选/);
+  assert.match(await page.locator('.recommend-library .hint').innerText(), /共 27 首候选/);
 
   // "重新分析" rebuilds from the same fixtures and returns to the first batch.
   await page.getByRole('button', { name: '重新分析' }).click();

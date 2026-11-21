@@ -4,6 +4,8 @@ import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readBackgroundImage } from '../src/main/background-image.mjs';
+import { sanitizeGlass } from '../src/main/settings.mjs';
+import { MAX_BACKGROUND_IMAGE_BYTES } from '../src/main/settings.mjs';
 
 test('readBackgroundImage encodes supported raster formats as strict data URLs', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bg-image-'));
@@ -15,6 +17,21 @@ test('readBackgroundImage encodes supported raster formats as strict data URLs',
       assert.equal(dataUrl.startsWith(`data:${mime};base64,`), true);
       assert.equal(Buffer.from(dataUrl.split(',')[1], 'base64').toString(), 'fake-image-bytes');
     }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a full-size image accepted by the picker survives the settings sanitizer', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bg-image-limit-'));
+  try {
+    const file = join(dir, 'big.png');
+    // Exactly the picker's raw cap: base64 inflates to ~4 MB. This used to be silently dropped
+    // by sanitizeGlass because its 4 MB cap was smaller than the picker's encoded output.
+    await writeFile(file, Buffer.alloc(MAX_BACKGROUND_IMAGE_BYTES, 7));
+    const dataUrl = await readBackgroundImage(file);
+    const stored = sanitizeGlass({ backgroundImage: dataUrl }).backgroundImage;
+    assert.equal(stored, dataUrl, 'a picked image must never be discarded by sanitizeGlass');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

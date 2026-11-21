@@ -152,7 +152,7 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       const albumSeeds = profile.albums.slice(0, MAX_ALBUM_SEEDS);
       setReasons(artistSeeds.slice(0, 6));
       setDimensions([
-        { id: 'score', name: `目标评分 ${Math.round(scoreProfile.target)}（±${Math.round(scoreProfile.tolerance)}）`, count: Math.round(scoreProfile.count) },
+        { id: 'score', name: `口味契合线 ${Math.round(scoreProfile.floor)}+`, count: Math.round(scoreProfile.count) },
         ...themeTokens.slice(0, 3).map(entry => ({ id: `theme:${entry.key}`, name: `主题「${entry.key}」`, count: entry.count })),
         ...profile.languages
           .filter(entry => entry.key !== 'unknown' && entry.share >= 0.05)
@@ -261,9 +261,9 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
         playlistCandidates.length ? `${playlistCandidates.length} 首歌单曲目` : '',
       ].filter(Boolean).join('、');
       const scoreText = scoreProfile.count
-        ? `目标 ${Math.round(scoreProfile.target)} 分 ±${Math.round(scoreProfile.tolerance)}`
-        : '默认评分';
-      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中挑出 ${ranked.length} 首候选，按评分相近排序（${scoreText}，同歌手/同专辑降权）`);
+        ? `契合线 ${Math.round(scoreProfile.floor)}+，收藏歌手/专辑优先`
+        : '默认排序';
+      setSummary(`基于 ${sourceParts}，从 ${candidateParts}中精选 ${ranked.length} 首，按口味契合度从高到低（${scoreText}，每位歌手限量避免刷屏）`);
       setLoaded(true);
       if (!ranked.length) {
         setSummary('');
@@ -310,7 +310,7 @@ export function RecommendPage({ ctx }: { ctx: LibraryContext }) {
       <span className="recommend-icon"><Sparkles size={21} /></span>
       <div className="recommend-heading">
         <h2>猜你喜欢</h2>
-        <p>{loading ? '正在分析你的收藏、歌单与最近播放…' : (summary || error || '根据你的收藏歌单，发现评分相近的新歌。')}</p>
+        <p>{loading ? '正在分析你的收藏、歌单与最近播放…' : (summary || error || '根据你的收藏口味，精选契合度最高的新歌。')}</p>
         {!!dimensions.length && !loading && <p className="recommend-dims">
           <span>评分画像</span>
           {dimensions.map(item => <span key={item.id} className="recommend-dim">{item.name}</span>)}

@@ -5,6 +5,24 @@
 // child of Explorer's taskbar. The taskbar-strip mode instead draws a topmost window exactly on
 // the taskbar's own rectangle, which is how the Chinese music clients present the same feature.
 
+/**
+ * Detect a truly full-screen foreground: the work area covers the whole display, so no taskbar
+ * band survives on any edge. A full-screen game/borderless window drives Windows to hide the
+ * taskbar this way. The transport bar must yield in that state instead of sitting on top of the
+ * game — being topmost at the 'screen-saver' level would otherwise block full-screen play.
+ *
+ * Note this also reads true when the user enables "auto-hide taskbar". That is intentional: with
+ * no visible taskbar there is no band to draw the strip on, so the bar steps aside either way.
+ */
+export function isFullscreenBand(bounds, workArea) {
+  if (!bounds || !workArea) return false;
+  const top = workArea.y - bounds.y;
+  const left = workArea.x - bounds.x;
+  const bottom = bounds.y + bounds.height - (workArea.y + workArea.height);
+  const right = bounds.x + bounds.width - (workArea.x + workArea.width);
+  return Math.max(top, left, bottom, right) <= 0;
+}
+
 /** Clamp a rectangle into a given area (taskbar excluded) so nothing hides off-screen. */
 export function clampRectangle(
   x, y,

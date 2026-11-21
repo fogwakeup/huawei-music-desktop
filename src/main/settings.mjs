@@ -62,10 +62,15 @@ const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 // A background image is stored inline in settings.json. Only small, fixed-format image data URLs
 // are accepted so a tampered settings file can never inject script or bloat the store.
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
-const MAX_IMAGE_DATA_URL = 4 * 1024 * 1024; // ~3 MB decoded image
+// Single source of truth shared with the picker (background-image.mjs): the raw-byte cap and the
+// encoded-data-URL cap must agree, otherwise a picked image can pass the picker and then be
+// silently dropped here — the user sees "uploaded but nothing changed". base64 inflates by 4/3,
+// so the data-URL cap must leave room for a full-size raw image plus the data:...;base64, prefix.
+export const MAX_BACKGROUND_IMAGE_BYTES = 3 * 1024 * 1024;
+export const MAX_BACKGROUND_IMAGE_DATA_URL = Math.ceil(MAX_BACKGROUND_IMAGE_BYTES * 4 / 3) + 256;
 
 function isSafeImageDataUrl(value) {
-  return typeof value === 'string' && value.length <= MAX_IMAGE_DATA_URL && IMAGE_DATA_URL.test(value);
+  return typeof value === 'string' && value.length <= MAX_BACKGROUND_IMAGE_DATA_URL && IMAGE_DATA_URL.test(value);
 }
 
 function clampNumber(value, min, max, fallback) {

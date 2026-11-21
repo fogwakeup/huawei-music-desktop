@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeMiniPlayerState } from '../src/main/mini-player-payload.mjs';
 import { sanitizeMiniPlayer, sanitizeSettings } from '../src/main/settings.mjs';
-import { clampRectangle, dockPosition, taskbarBarRect, taskbarStrip } from '../src/main/mini-player-layout.mjs';
+import { clampRectangle, dockPosition, isFullscreenBand, taskbarBarRect, taskbarStrip } from '../src/main/mini-player-layout.mjs';
 
 const COVER = 'https://img.kuke.com/cover/123.jpg';
 
@@ -87,6 +87,15 @@ test('taskbarStrip handles top, left and right taskbars', () => {
     { edge: 'left', rect: { x: 0, y: 0, width: 48, height: 1080 } });
   assert.deepEqual(taskbarStrip(BOUNDS, { x: 0, y: 0, width: 1872, height: 1080 }),
     { edge: 'right', rect: { x: 1872, y: 0, width: 48, height: 1080 } });
+});
+
+test('isFullscreenBand detects a game covering the taskbar and ignores a normal desktop', () => {
+  assert.equal(isFullscreenBand(BOUNDS, WORK), false, 'a visible taskbar is not full-screen');
+  assert.equal(isFullscreenBand(BOUNDS, BOUNDS), true, 'work area filling the display means full-screen');
+  // Auto-hidden taskbar on the bottom still counts (work area == bounds) — the bar steps aside.
+  assert.equal(isFullscreenBand(BOUNDS, { x: 0, y: 0, width: 1920, height: 1080 }), true);
+  assert.equal(isFullscreenBand(null, BOUNDS), false);
+  assert.equal(isFullscreenBand(BOUNDS, null), false);
 });
 
 test('taskbarStrip falls back to a bottom band when the taskbar auto-hides', () => {

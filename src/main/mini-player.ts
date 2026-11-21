@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { channels } from '../shared/channels';
 import { sanitizeMiniPlayerState } from './mini-player-payload.mjs';
 import { updateSettings } from './storage';
-import { clampRectangle, dockPosition, taskbarBarRect, taskbarStrip } from './mini-player-layout.mjs';
+import { clampRectangle, dockPosition, isFullscreenBand, taskbarBarRect, taskbarStrip } from './mini-player-layout.mjs';
 import type { AppSettings, MiniPlayerSettings, MiniPlayerState, PlayerCommand } from '../shared/types';
 
 const FLOAT_SIZE = { width: 560, height: 66 };
@@ -26,8 +26,9 @@ const TASKBAR_TRAY_RESERVE_RATIO = 0.24;
 const FLOAT_GAP = 8;
 // Windows repaints the taskbar whenever it is hovered or a flyout opens, which can put Explorer
 // above a topmost window. Re-asserting the topmost flag keeps the strip visible without ever
-// activating this window (no focus stealing).
-const TOPMOST_HEARTBEAT_MS = 5000;
+// activating this window (no focus stealing). The same tick checks for a full-screen foreground;
+// when one is detected the bar hides so a full-screen game is never covered.
+const TOPMOST_HEARTBEAT_MS = 1500;
 const COMMANDS: PlayerCommand[] = [
   'play-pause', 'next', 'previous', 'volume-up', 'volume-down', 'mute', 'like', 'toggle-desktop-lyrics',
 ];
@@ -104,9 +105,28 @@ export function createMiniPlayerModule(hooks: {
     heartbeat = undefined;
   }
 
-  function keepOnTop(): void {
+  // Yield to a full-screen game instead of covering it. A topmost bar at the old 'screen-saver'
+  // level sat above full-screen games and made them unplayable; hiding on a full-screen work area
+  // and restoring afterwards keeps the strip useful without ever interfering with the foreground.
+  let yieldedForFullscreen = false;
+  function refreshTopmost(): void {
     if (!miniWindow || miniWindow.isDestroyed()) return;
-    try { miniWindow.setAlwaysOnTop(true, 'screen-saver'); } catch { /* Window closing. */ }
+    const display = primaryDisplay();
+    const fullscreen = isFullscreenBand(display.bounds, display.workArea);
+    try {
+      if (fullscreen) {
+        if (miniWindow.isVisible()) { yieldedForFullscreen = true; miniWindow.hide(); }
+        return;
+      }
+      if (yieldedForFullscreen) {
+        yieldedForFullscreen = false;
+        // 'floating' stays above the taskbar but below true screen-saver overlays, so a
+        // full-screen application that asks for topmost can cover us on its own as well.
+        miniWindow.setAlwaysOnTop(true, 'floating');
+        miniWindow.showInactive();
+      }
+      miniWindow.setAlwaysOnTop(true, 'floating');
+    } catch { /* Window closing. */ }
   }
 
   function apply(settings: MiniPlayerSettings): void {
@@ -131,7 +151,7 @@ export function createMiniPlayerModule(hooks: {
       return;
     }
     syncBounds();
-    keepOnTop();
+    refreshTopmost();
     if (pendingState) sendState(pendingState);
   }
 
@@ -174,9 +194,10 @@ export function createMiniPlayerModule(hooks: {
     });
     miniWindow = window;
     mode = taskbarMode ? 'taskbar' : 'float';
-    // 'screen-saver' is above normal topmost windows AND the taskbar, so the strip stays visible
-    // instead of being painted over when the taskbar is set to always-on-top.
-    window.setAlwaysOnTop(true, 'screen-saver');
+    // 'floating' keeps the strip above the taskbar (even when the taskbar is always-on-top) but
+    // no longer uses the 'screen-saver' level, which sat above full-screen games and blocked play.
+    // The heartbeat hides the window entirely while a full-screen foreground is detected.
+    window.setAlwaysOnTop(true, 'floating');
     window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
     // Identity-checked teardown: a rebuilt window must not be cleared by the old window's events.
     window.once('closed', () => {
@@ -224,13 +245,13 @@ export function createMiniPlayerModule(hooks: {
     });
     // Display geometry changed (monitor unplug / resolution / taskbar resize or move): re-derive
     // the rectangle instead of leaving the bar hidden off-screen or floating off the taskbar.
-    const onDisplayChange = () => { syncBounds(); keepOnTop(); };
+    const onDisplayChange = () => { syncBounds(); refreshTopmost(); };
     screen.on('display-added', onDisplayChange);
     screen.on('display-removed', onDisplayChange);
     screen.on('display-metrics-changed', onDisplayChange);
     // The taskbar is repainted (hover, flyouts, shell restart): stay above it.
     stopHeartbeat();
-    heartbeat = setInterval(keepOnTop, TOPMOST_HEARTBEAT_MS);
+    heartbeat = setInterval(refreshTopmost, TOPMOST_HEARTBEAT_MS);
     window.once('closed', () => {
       screen.removeListener('display-added', onDisplayChange);
       screen.removeListener('display-removed', onDisplayChange);

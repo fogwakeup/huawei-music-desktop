@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DIVERSITY_CAPS, OVERLAP_PENALTY, SCORE_WEIGHTS, SIMILARITY,
+  DIVERSITY_CAPS, SCORE_WEIGHTS, SIMILARITY,
   batchOf, buildRecommendationModel, buildRecommendationPool, buildScoreProfile,
   buildSearchKeywords, buildTasteProfile, buildThemeTokens, detectLanguage, formatClock,
   rankCandidates, scoreCandidate, scoreSimilarity, scoreSong, secondHopSeeds,
@@ -103,23 +103,25 @@ test('weighted seeds count more than plain ones', () => {
   assert.equal(profile.total, 4);
 });
 
-test('song-score weights sum to one and contain no artist or album identity', () => {
+test('song-score weights sum to one and make artist/album the primary signals', () => {
   const total = Object.values(SCORE_WEIGHTS).reduce((sum, value) => sum + value, 0);
   assert.equal(Math.round(total * 1000) / 1000, 1);
-  assert.equal('artist' in SCORE_WEIGHTS, false);
-  assert.equal('album' in SCORE_WEIGHTS, false);
+  assert.ok(SCORE_WEIGHTS.artist > SCORE_WEIGHTS.language, 'artist must outweigh secondary signals');
+  assert.ok(SCORE_WEIGHTS.artist + SCORE_WEIGHTS.album >= 0.4, 'artist+album must be a strong taste signal');
 });
 
-test('scoreSong ignores artist/album identity: a stranger can outscore a saved artist', () => {
+test('scoreSong rewards saved artist/album and penalises a mismatched stranger', () => {
   const seeds = savedSeeds();
   const model = modelFor(seeds);
-  const stranger = scoreSong(track('new', [{ id: 'A9', name: '陌生' }], { id: 'L9', title: '别的专辑' }, true,
-    { title: '雨夜情歌二', durationSeconds: 245 }), model);
   const familiar = scoreSong(track('old', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+    { title: '雨夜情歌三', durationSeconds: 245 }), model);
+  const stranger = scoreSong(track('new', [{ id: 'A9', name: '陌生' }], { id: 'L9', title: '别的专辑' }, true,
     { title: 'Rainy Night Remix', durationSeconds: 720 }), model);
-  assert.ok(stranger.score > familiar.score + 20,
-    `stranger ${stranger.score} should beat familiar ${familiar.score} on content alone`);
-  assert.ok(stranger.score >= 0 && stranger.score <= 100);
+  assert.ok(familiar.score > stranger.score + 20,
+    `saved artist ${familiar.score} should clearly beat stranger ${stranger.score}`);
+  assert.ok(familiar.score >= 0 && familiar.score <= 100);
+  assert.match(familiar.reasons.join(' / '), /常听歌手 甲/);
+  assert.match(familiar.reasons.join(' / '), /同专辑《专辑一》/);
 });
 
 test('scoreSong returns explainable reason strings and a 0-100 score', () => {
@@ -135,7 +137,7 @@ test('scoreSong returns explainable reason strings and a 0-100 score', () => {
   assert.match(result.reasons.join(' / '), /主题「/);
   assert.match(result.reasons.join(' / '), /歌单共现 ×2/);
   assert.deepEqual(Object.keys(result.parts).sort(),
-    ['buzz', 'duration', 'language', 'theme', 'version']);
+    ['album', 'artist', 'buzz', 'duration', 'language', 'theme', 'version']);
 });
 
 test('scoreCandidate keeps the legacy 0-1 scale for old callers', () => {
@@ -155,16 +157,18 @@ test('scoreSong penalises versions the library never keeps', () => {
   assert.ok(studio.score > live.score, 'a live-only title should score below a plain one');
 });
 
-test('buildScoreProfile and scoreSimilarity describe a tolerance band around saved songs', () => {
+test('buildScoreProfile derives an acceptance floor below the saved-song minimum', () => {
   const seeds = savedSeeds();
   const model = modelFor(seeds);
   const profile = buildScoreProfile(seeds, model);
   assert.equal(profile.count, 2);
   assert.ok(profile.target > 60 && profile.target <= 100, `target ${profile.target}`);
   assert.ok(profile.tolerance >= SIMILARITY.minTolerance);
+  assert.ok(profile.floor >= 0 && profile.floor < profile.min, `floor ${profile.floor} must sit below min ${profile.min}`);
   assert.equal(scoreSimilarity(profile.target, profile), 1);
-  assert.equal(scoreSimilarity(profile.target + profile.tolerance * 2, profile), 0);
-  assert.ok(scoreSimilarity(profile.target + 5, profile) > scoreSimilarity(profile.target + 40, profile));
+  assert.equal(scoreSimilarity(profile.floor, profile), 0);
+  // Monotonic in fit: higher fit is never scored lower (the v3 |score-target| bug is gone).
+  assert.ok(scoreSimilarity(profile.target + 5, profile) >= scoreSimilarity(profile.target - 5, profile));
 });
 
 test('buildScoreProfile stays safe on malformed and empty seeds', () => {
@@ -172,48 +176,50 @@ test('buildScoreProfile stays safe on malformed and empty seeds', () => {
   const empty = buildScoreProfile(null, model);
   assert.equal(empty.count, 0);
   assert.equal(empty.target, 60);
+  assert.equal(empty.floor, 0);
   assert.equal(scoreSimilarity(80, empty), 0);
 });
 
-test('rankCandidates prefers a score-similar stranger over a same-artist mismatch', () => {
+test('rankCandidates puts the higher-fit song first (a 99 never hides behind a 78)', () => {
   const seeds = savedSeeds();
   const model = modelFor(seeds);
-  const scoreProfile = buildScoreProfile(seeds, model);
   const stranger = track('new', [{ id: 'A9', name: '陌生' }], { id: 'L9', title: '别的专辑' }, true,
     { title: '雨夜情歌二', durationSeconds: 245 });
   const familiar = track('old', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
     { title: 'Rainy Night Remix', durationSeconds: 720 });
-  const ranked = rankCandidates([familiar, stranger], { model, scoreProfile });
-  assert.equal(ranked[0].track.id, 'new', 'score similarity must beat shared artist identity');
-  assert.match(ranked[0].reasons.join(' / '), /评分|语种|主题/);
+  // No scoreProfile here: pure descending fit. Saved artist wins because it genuinely fits more.
+  const ranked = rankCandidates([stranger, familiar], { model });
+  assert.equal(ranked[0].track.id, 'old');
+  assert.ok(ranked[0].score > ranked[1].score);
+  assert.match(ranked[0].reasons.join(' / '), /常听歌手|语种|主题|时长/);
 });
 
-test('rankCandidates demotes same-artist and same-album songs of equal score', () => {
+test('rankCandidates drops low-fit songs below the acceptance floor', () => {
   const seeds = savedSeeds();
   const model = modelFor(seeds);
   const scoreProfile = buildScoreProfile(seeds, model);
-  const same = track('same', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
-    { title: '雨夜情歌三', durationSeconds: 245 });
-  const other = track('other', [{ id: 'A8', name: '乙' }], { id: 'L8', title: '别的专辑' }, true,
-    { title: '雨夜情歌四', durationSeconds: 245 });
-  assert.ok(OVERLAP_PENALTY.artist > OVERLAP_PENALTY.album);
-  const ranked = rankCandidates([same, other], { model, scoreProfile });
-  assert.equal(ranked[0].track.id, 'other');
+  const good = track('good', [{ id: 'A1', name: '甲' }], { id: 'L1', title: '专辑一' }, true,
+    { title: '雨夜情歌', durationSeconds: 245 });
+  // A totally foreign, very long remix scores far below the saved-song range.
+  const bad = track('bad', [{ id: 'Z9', name: '陌生' }], { id: 'Z8', title: '别的' }, true,
+    { title: 'Unknown Remix', durationSeconds: 900 });
+  const ranked = rankCandidates([good, bad], { model, scoreProfile });
+  assert.deepEqual(ranked.map(item => item.track.id), ['good'], 'low-fit song must be filtered out');
 });
 
-test('rankCandidates starts with one song per artist and per album', () => {
-  const seeds = savedSeeds();
-  const model = modelFor(seeds);
-  const scoreProfile = buildScoreProfile(seeds, model);
+test('rankCandidates caps one song per artist and per album before relaxing', () => {
+  // No profile → no floor filtering, so the diversity cap itself is what we measure here.
   const candidates = [
     ...Array.from({ length: 6 }, (_unused, index) => track(`a${index}`, [{ id: 'A1', name: '甲' }],
-      { id: 'L1', title: '专辑一' }, true, { title: '雨夜情歌', durationSeconds: 240 })),
+      { id: 'L1', title: '专辑一' })),
     ...Array.from({ length: 6 }, (_unused, index) => track(`b${index}`, [{ id: 'A2', name: '乙' }],
-      { id: 'L2', title: '专辑二' }, true, { title: '雨夜情歌', durationSeconds: 240 })),
+      { id: 'L2', title: '专辑二' })),
   ];
-  const ranked = rankCandidates(candidates, { limit: 6, model, scoreProfile });
-  assert.equal(new Set(ranked.slice(0, 2).map(item => item.track.artists[0].id)).size, 2);
-  assert.equal(new Set(ranked.slice(0, 2).map(item => item.track.album.id)).size, 2);
+  const ranked = rankCandidates(candidates, { limit: 4 });
+  assert.equal(new Set(ranked.slice(0, 2).map(item => item.track.artists[0].id)).size, 2,
+    'first pass must alternate artists');
+  assert.equal(new Set(ranked.slice(0, 2).map(item => item.track.album.id)).size, 2,
+    'first pass must alternate albums');
   assert.equal(DIVERSITY_CAPS[0], 1);
 });
 
@@ -249,7 +255,7 @@ test('recommendation pool honours the limit and orders groups by weight', () => 
   assert.deepEqual(pool.map(item => item.id), ['a1', 'b1', 'a2', 'b2']);
 });
 
-test('recommendation pool switches to scored ranking when a model is supplied', () => {
+test('recommendation pool ranks by fit and filters low-fit songs when a model is supplied', () => {
   const seeds = [track('s1', [{ id: 'A1', name: '甲' }], undefined, true, { title: '华语' })];
   const model = modelFor(seeds);
   const scoreProfile = buildScoreProfile(seeds, model);
@@ -257,7 +263,7 @@ test('recommendation pool switches to scored ranking when a model is supplied', 
     { key: 'artist:A1', weight: 1, tracks: [track('cold', [{ id: 'A9', name: 'Foreigner' }], undefined, true, { title: 'Other Song' })] },
     { key: 'artist:A2', weight: 1, tracks: [track('warm', [{ id: 'A1', name: '甲' }], undefined, true, { title: '华语二' })] },
   ], [], { limit: 2, model, scoreProfile });
-  assert.deepEqual(pool.map(item => item.id), ['warm', 'cold']);
+  assert.deepEqual(pool.map(item => item.id), ['warm'], 'the foreign low-fit song must be filtered out');
 });
 
 test('recommendation pool tolerates malformed groups', () => {

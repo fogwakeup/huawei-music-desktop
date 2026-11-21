@@ -974,7 +974,7 @@ export function App() {
   const viewHint =
     view.name === 'favorites' ? '收藏的全部歌曲，向下滚动自动加载'
       : view.name === 'playlists' ? '自建、收藏与榜单'
-        : view.name === 'recommend' ? '按歌曲评分寻找相近口味，主动避开同歌手与同专辑循环'
+        : view.name === 'recommend' ? '按口味契合度精选新歌，收藏歌手与专辑优先'
           : view.name === 'search' ? '按歌名或艺人查找'
           : view.name === 'history' ? '本机记录与华为服务端记录'
             : view.name === 'settings' ? '播放、界面与隐私偏好'

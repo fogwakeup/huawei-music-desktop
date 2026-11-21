@@ -3,15 +3,18 @@
 // we derive taste from the user's own library and rank catalogue candidates we can actually
 // fetch. All functions here are pure so they can be unit-tested without Electron.
 //
-// RECOMMENDATION MODEL (v3)
-// 1. Every track gets an explainable 0-100 "song score" from content signals that really
-//    exist in the data: language, version markers, duration habit, title theme words and
-//    playlist co-occurrence. Artist/album identity is deliberately NOT part of that score.
-// 2. The user's saved songs give a target score plus a tolerance band. Candidates are ranked
-//    by how close their score is to that band ("推荐评分相近的歌"), not by artist identity.
-// 3. Same artist/album as a saved song gets an explicit penalty, and a progressive per-artist
-//    / per-album cap starts at 1. Together with the expanded candidate sources this breaks
-//    the "same artist, same album" loop the previous two versions got stuck in.
+// RECOMMENDATION MODEL (v4, precision-oriented)
+// 1. Every track gets an explainable 0-100 "taste fit" score. The strongest signals are the
+//    ones that actually define taste: the artist and album a user keeps, then language, recurring
+//    title words, playlist co-occurrence, duration habit and version markers. Artist/album are
+//    back in the score — dropping them in v3 made high scores possible for songs the user simply
+//    does not listen to, which read as "scores don't match my taste".
+// 2. Ranking is plain score-descending (highest fit first) and LOW-fit songs below a learned
+//    floor are dropped. v3 ranked by |score - target|, which perversely buried a 99-fit song
+//    under a 78-fit one just because the target was 85. Precision means "more fit wins".
+// 3. Diversity is enforced by a progressive per-artist / per-album cap, NOT by penalising saved
+//    artists/albums. So a favourite artist's genuinely fitting songs can still appear (one or two
+//    per batch) without one discography taking over the list.
 //
 // The provider exposes no genre/tag field on a track (docs/API_CONTRACT.md §5 lists every
 // field the normalizer sees), so "曲风" is approximated with the signals above. Nothing here
@@ -21,34 +24,41 @@ function idOf(value) {
   return typeof value === 'string' && value.length ? value : '';
 }
 
-/** Weights of the 0-100 song score. Sum = 1. Artist and album are intentionally absent. */
+/** Weights of the 0-100 taste-fit score. Sum = 1. Artist/album are the primary taste signals. */
 export const SCORE_WEIGHTS = Object.freeze({
-  language: 0.32,
-  version: 0.18,
-  duration: 0.2,
-  theme: 0.2,
-  buzz: 0.1,
+  artist: 0.34,
+  album: 0.12,
+  language: 0.16,
+  theme: 0.14,
+  buzz: 0.12,
+  duration: 0.08,
+  version: 0.04,
 });
 
 export const SCORE_LABELS = Object.freeze({
+  artist: '歌手',
+  album: '专辑',
   language: '语种',
-  version: '版本类型',
-  duration: '时长习惯',
   theme: '主题用词',
   buzz: '歌单共现',
+  duration: '时长习惯',
+  version: '版本类型',
 });
 
 /** Kept as an alias so older callers/tests keep working. */
 export const DIMENSION_LABELS = SCORE_LABELS;
 
-/** How close a candidate's score must be to the user's target score. */
+/** How the lower acceptance floor is derived from the saved-song score distribution. */
 export const SIMILARITY = Object.freeze({
-  minTolerance: 20,
-  spreadFactor: 1.5,
+  minTolerance: 18,
+  spreadFactor: 1.2,
 });
 
-/** Same-artist / same-album as a saved song is a demerit, not a merit. */
-export const OVERLAP_PENALTY = Object.freeze({ artist: 0.1, album: 0.06 });
+/**
+ * Minor same-artist/album demerit. Kept small and exported for callers that still reference it;
+ * diversity is primarily enforced by DIVERSITY_CAPS, so a favourite artist's best songs survive.
+ */
+export const OVERLAP_PENALTY = Object.freeze({ artist: 0.02, album: 0.01 });
 
 /** Progressive diversity caps: one per artist/album first, then relax only if needed. */
 export const DIVERSITY_CAPS = Object.freeze([1, 2, 3, Number.POSITIVE_INFINITY]);
@@ -270,6 +280,28 @@ export function buildRecommendationModel(profile, options = {}) {
   for (const entry of profile?.versions ?? []) {
     if (typeof entry?.key === 'string') knownVersions.set(entry.key, Number(entry.count) || 0);
   }
+  // Artist/album affinity is the strongest taste signal. Normalise by the top entry so a
+  // favourite artist scores 1 and a never-seen one scores 0; counts come straight from the
+  // weighted profile (saved 1.0, playlist 0.7, history 0.5).
+  const artistWeights = new Map();
+  for (const artist of profile?.artists ?? []) {
+    if (idOf(artist?.id)) artistWeights.set(artist.id, Number(artist.count) || 0);
+  }
+  const albumWeights = new Map();
+  for (const album of profile?.albums ?? []) {
+    if (idOf(album?.id)) albumWeights.set(album.id, Number(album.count) || 0);
+  }
+  const normalise = map => {
+    let max = 0;
+    for (const value of map.values()) if (value > max) max = value;
+    return id => (max > 0 ? clamp01((map.get(id) ?? 0) / max) : 0);
+  };
+  const artistAffinity = normalise(artistWeights);
+  const albumAffinity = normalise(albumWeights);
+  const artistName = new Map(
+    (profile?.artists ?? []).filter(entry => idOf(entry?.id)).map(entry => [entry.id, entry.name ?? '']),
+  );
+
   const themeTokens = Array.isArray(options.themeTokens) ? options.themeTokens : [];
   const themeCounts = new Map(themeTokens.map(entry => [entry.key, Number(entry.count) || 0]));
   const seedArtists = new Set(
@@ -291,6 +323,9 @@ export function buildRecommendationModel(profile, options = {}) {
     themeTokens,
     seedArtists,
     seedAlbums,
+    artistAffinity,
+    albumAffinity,
+    artistName: id => artistName.get(id) ?? '',
     playlistHitCount: id => Number(playlistHits.get(id) ?? 0),
     languageShare: key => (key === 'unknown' ? 0.25 : Number(languageShares.get(key) ?? 0)),
     versionFit: tags => {
@@ -325,14 +360,34 @@ function durationFit(durationSeconds, stats) {
 }
 
 /**
- * The 0-100 song score. No artist/album identity is consulted: a song by an unfamiliar
- * artist can score 90, and a song by a saved artist can score 40. This is what makes
- * "recommend songs with a similar score" possible instead of "more of the same singer".
+ * The 0-100 taste-fit score. Artist and album are the primary signals again: a song by a
+ * frequently-saved artist scores high because that is the strongest evidence of taste. The
+ * score is used for plain descending ranking, so a higher fit is always better — no "too close
+ * to the target" paradox. Diversity comes from the per-artist cap, not from this score.
  */
 export function scoreSong(track, model) {
-  const parts = { language: 0, version: 0, duration: 0, theme: 0, buzz: 0 };
+  const parts = { artist: 0, album: 0, language: 0, version: 0, duration: 0, theme: 0, buzz: 0 };
   const reasons = [];
   if (!track || typeof track !== 'object' || !model) return { score: 0, parts, reasons };
+
+  // 1) Artist affinity — best credit among the candidate's artists.
+  let artistValue = 0;
+  let artistName = '';
+  for (const artist of Array.isArray(track.artists) ? track.artists : []) {
+    const id = idOf(artist?.id);
+    const value = id ? model.artistAffinity(id) : 0;
+    if (value > artistValue) {
+      artistValue = value;
+      artistName = (typeof artist.name === 'string' && artist.name) || model.artistName(id);
+    }
+  }
+  parts.artist = artistValue;
+  if (artistValue >= 0.5 && artistName) reasons.push(`常听歌手 ${artistName}`);
+
+  // 2) Album affinity.
+  const albumId = idOf(track.album?.id);
+  parts.album = albumId ? model.albumAffinity(albumId) : 0;
+  if (parts.album >= 0.5 && track.album?.title) reasons.push(`同专辑《${track.album.title}》`);
 
   const language = detectLanguage(track);
   parts.language = model.languageShare(language);
@@ -366,9 +421,9 @@ export function scoreCandidate(track, model) {
 }
 
 /**
- * Target score and tolerance learned from the user's saved songs. The tolerance is wide
- * enough for a small library but tightens as the library grows, so recommendations stay
- * near the score range the user actually keeps.
+ * Acceptance floor learned from the user's saved songs: candidates scoring below
+ * `floor` are too far from the user's taste and are dropped. `target`/`tolerance` stay for the
+ * UI readout, but ranking is plain score-descending (higher fit = better), never |score-target|.
  */
 export function buildScoreProfile(seeds, model) {
   const list = (Array.isArray(seeds) ? seeds : []).map(seedOf).filter(Boolean);
@@ -385,24 +440,30 @@ export function buildScoreProfile(seeds, model) {
     min = Math.min(min, score);
     max = Math.max(max, score);
   }
-  if (!weightTotal) return { target: 60, tolerance: SIMILARITY.minTolerance, min: 0, max: 0, count: 0 };
+  if (!weightTotal) return { target: 60, tolerance: SIMILARITY.minTolerance, floor: 0, min: 0, max: 0, count: 0 };
   const target = sum / weightTotal;
   const variance = Math.max(0, sumSquares / weightTotal - target * target);
+  const tolerance = Math.max(SIMILARITY.minTolerance, Math.sqrt(variance) * SIMILARITY.spreadFactor);
   return {
     target,
-    tolerance: Math.max(SIMILARITY.minTolerance, Math.sqrt(variance) * SIMILARITY.spreadFactor),
+    tolerance,
+    // Drop songs that fit materially worse than the weakest saved song. Clamped into [0, 100]
+    // and never above the target, so a tiny library still yields candidates.
+    floor: clamp01((min - tolerance * 0.35) / 100) * 100,
     min: Number.isFinite(min) ? min : 0,
     max,
     count: weightTotal,
   };
 }
 
-/** 1 when a candidate's score sits exactly on the target, 0 at the edge of the band. */
+/** 1 at/above the target fit, tapering to 0 at the acceptance floor (used for the UI meter). */
 export function scoreSimilarity(score, profile) {
   if (!profile || !profile.count) return 0;
   const value = Number(score);
   if (!Number.isFinite(value)) return 0;
-  return clamp01(1 - Math.abs(value - profile.target) / profile.tolerance);
+  if (value >= profile.target) return 1;
+  const span = Math.max(1, profile.target - profile.floor);
+  return clamp01(1 - (profile.target - value) / span);
 }
 
 function artistKeysOf(track) {
@@ -419,14 +480,16 @@ function albumKeyOf(track) {
 }
 
 /**
- * Rank by closeness to the user's score band, with same-artist / same-album demerits and
- * progressive diversity caps. Without `scoreProfile` it falls back to plain score order,
- * which keeps the legacy unscored call path working.
+ * Precision ranking: highest taste-fit first. Candidates scoring below the learned floor are
+ * discarded (too far from the user's taste). A progressive per-artist / per-album cap supplies
+ * diversity instead of penalising saved artists, so a favourite artist's best songs still appear
+ * — just not ten in a row. Without `model` the legacy unscored path is preserved.
  */
 export function rankCandidates(candidates, options = {}) {
   const limit = Number.isFinite(options.limit) && options.limit > 0 ? Math.floor(options.limit) : 120;
   const model = options.model ?? null;
   const profile = options.scoreProfile ?? null;
+  const floor = profile && profile.count ? profile.floor : 0;
   const excluded = new Set((Array.isArray(options.excludeIds) ? options.excludeIds : []).filter(idOf));
   const seen = new Set(excluded);
   const scored = [];
@@ -437,17 +500,12 @@ export function rankCandidates(candidates, options = {}) {
     if (!id || seen.has(id) || track.available === false) continue;
     seen.add(id);
     const { score, parts, reasons } = model ? scoreSong(track, model) : { score: 0, parts: {}, reasons: [] };
-    let match = profile ? scoreSimilarity(score, profile) : score / 100;
-    if (profile && model) {
-      if (artistKeysOf(track).some(key => model.seedArtists.has(key))) match -= OVERLAP_PENALTY.artist;
-      const album = albumKeyOf(track);
-      if (album && model.seedAlbums.has(album)) match -= OVERLAP_PENALTY.album;
-    }
-    scored.push({ track, score, parts, reasons, match, taken: false });
+    if (model && score < floor) continue; // precision: drop low-fit songs entirely
+    scored.push({ track, score, parts, reasons, taken: false });
   }
 
-  scored.sort((left, right) => right.match - left.match || right.score - left.score
-    || left.track.id.localeCompare(right.track.id));
+  // Plain descending fit — a 99 never hides behind a 78. Tiny tie-break keeps output stable.
+  scored.sort((left, right) => right.score - left.score || left.track.id.localeCompare(right.track.id));
 
   const picked = [];
   const perArtist = new Map();
